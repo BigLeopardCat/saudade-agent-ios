@@ -1,0 +1,9 @@
+泠月喵 / Lingyue character artwork
+Author and source: BigLeopardCat, https://github.com/BigLeopardCat/saudade-blog-agent
+Source revision: 6ec9688870e51582974034214db6a251fc433818
+Source file: frontend/public/live2d-widgets/lingyue-toggle.png
+This image is copied without modification.
+Artwork license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International.
+https://creativecommons.org/licenses/by-nc-sa/4.0/
+The accompanying ASSETS-LICENSE.md is the upstream project's original notice.
+The code and artwork have separate licenses. No Live2D SDK is bundled in this app.

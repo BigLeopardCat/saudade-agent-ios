@@ -1,0 +1,59 @@
+name: Lingyue
+options:
+  bundleIdPrefix: site.saudade
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  LingyueCore:
+    path: .
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Lingyue:
+    type: application
+    platform: iOS
+    sources: [App, Shared, Resources]
+    info:
+      path: Config/App-Info.plist
+      properties:
+        CFBundleDisplayName: 泠月喵
+        NSSupportsLiveActivities: true
+        UILaunchScreen: {}
+        CFBundleURLTypes:
+          - CFBundleURLName: site.saudade.lingyue
+            CFBundleURLSchemes: [lingyue]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: site.saudade.lingyue
+        CODE_SIGN_STYLE: Automatic
+    dependencies:
+      - package: LingyueCore
+      - target: LingyueIsland
+        embed: true
+  LingyueIsland:
+    type: app-extension
+    platform: iOS
+    sources: [Widget, Shared, Resources]
+    info:
+      path: Config/Widget-Info.plist
+      properties:
+        CFBundleDisplayName: 泠月喵灵动岛
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: site.saudade.lingyue.island
+        CODE_SIGN_STYLE: Automatic
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: LingyueCore
+schemes:
+  Lingyue:
+    build:
+      targets:
+        Lingyue: all
