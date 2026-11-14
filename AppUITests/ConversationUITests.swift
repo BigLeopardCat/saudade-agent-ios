@@ -50,7 +50,8 @@ final class ConversationUITests: XCTestCase {
     }
     @MainActor private func waitForReply(_ app: XCUIApplication) {
         let finished = NSPredicate { _, _ in
-            !app.buttons["停止接收回复"].exists && app.buttons["发送消息"].isEnabled == false
+            let composer = app.descendants(matching: .any).matching(identifier: "chat.composer").firstMatch
+            return !app.buttons["停止接收回复"].exists && composer.isEnabled
         }
         expectation(for: finished, evaluatedWith: app)
         waitForExpectations(timeout: 15)
