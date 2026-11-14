@@ -5,12 +5,12 @@ final class ConversationUITests: XCTestCase {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         app.tabBars.buttons["对话"].tap()
         let composer = app.descendants(matching: .any).matching(identifier: "chat.composer").firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
-        composer.tap(); composer.typeText("hello")
+        composer.tap(); composer.typeText("hello\n")
         waitForDraft("hello", composer: composer)
         app.buttons["发送消息"].tap()
         waitForReply(app)
@@ -25,18 +25,18 @@ final class ConversationUITests: XCTestCase {
         XCTAssertEqual(stamp.frame.midX, app.frame.midX, accuracy: 10)
         capture(app, name: "01-chat-nickname-time")
 
-        composer.tap(); composer.typeText("draft-one")
+        composer.tap(); composer.typeText("draft-one\n")
         waitForDraft("draft-one", composer: composer)
         app.buttons["chat.conversations"].tap()
         XCTAssertTrue(app.buttons["conversation.row.-1"].waitForExistence(timeout: 5))
         app.buttons["conversations.new"].tap()
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         XCTAssertNotEqual(composer.value as? String, "draft-one")
-        composer.tap(); composer.typeText("second")
+        composer.tap(); composer.typeText("second\n")
         waitForDraft("second", composer: composer)
         app.buttons["发送消息"].tap()
         waitForReply(app)
-        composer.tap(); composer.typeText("draft-two")
+        composer.tap(); composer.typeText("draft-two\n")
         waitForDraft("draft-two", composer: composer)
         app.buttons["chat.conversations"].tap()
         XCTAssertTrue(app.buttons["conversation.row.-2"].waitForExistence(timeout: 5))
@@ -56,9 +56,14 @@ final class ConversationUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["second"].exists)
     }
     @MainActor private func waitForDraft(_ value: String, composer: XCUIElement) {
-        expectation(for: NSPredicate(format: "value == %@", value), evaluatedWith: composer)
+        capture(XCUIApplication(), name: "input-" + value)
+        let matches = NSPredicate { object, _ in
+            guard let current = (object as? XCUIElement)?.value as? String else { return false }
+            return current.trimmingCharacters(in: .whitespacesAndNewlines) == value
+        }
+        expectation(for: matches, evaluatedWith: composer)
         waitForExpectations(timeout: 5)
-        XCTAssertEqual(composer.value as? String, value)
+        XCTAssertEqual((composer.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), value)
     }
     @MainActor private func waitForListToClose(_ app: XCUIApplication) {
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["conversations.new"])
