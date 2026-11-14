@@ -28,6 +28,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var profile: UserProfile?
     @Published private(set) var identityNotice: String?
     @Published private(set) var hasSession = false
+    @Published var loginPresented = false
     private var generation = UUID()
     private var streamTask: Task<Void, Never>?
     private var activeStream: ManagedChatStream?
@@ -111,7 +112,10 @@ final class AppStore: ObservableObject {
         await CompanionActivity.end(); islandActive = false
     }
 
-    func companionEnded() { stopReceiving(); islandActive = false }
+    func companionEnded() {
+        stopMarker = UserDefaults.standard.string(forKey: "lingyue.stopMarker")
+        stopReceiving(); islandActive = false
+    }
 
     func connect(origin: String, username: String, password: String) async {
         guard !busy, !refreshing else { return }
@@ -329,6 +333,10 @@ final class AppStore: ObservableObject {
         if messages.count > 80 { messages.removeFirst(messages.count - 80) }
         var bytes = messages.reduce(0) { $0 + $1.text.utf8.count }
         while messages.count > 1, bytes > 524_288 { bytes -= messages.removeFirst().text.utf8.count }
+        if messages.count == 1, messages[0].text.utf8.count > 524_288 {
+            let tail = String(decoding: messages[0].text.utf8.suffix(520_000), as: UTF8.self)
+            messages[0].text = "【本机仅显示这条长历史消息的末尾，完整内容请到博客查看。】\n\n" + tail
+        }
     }
 
     func stopReceiving() {

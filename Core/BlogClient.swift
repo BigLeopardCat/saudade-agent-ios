@@ -18,6 +18,8 @@ public struct BlogClient: Sendable {
         config.timeoutIntervalForResource = 300
         config.urlCache = nil
         config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.urlCredentialStorage = nil
         return URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
     }
     private static let session = makeSession()

@@ -82,6 +82,9 @@ struct BlogLoginView: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { password = ""; dismiss() }.disabled(submitted) } }
                 .onAppear { if origin.isEmpty { origin = store.configuration.origin } }
         }.interactiveDismissDisabled(submitted)
+            .alert("登录未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
+                Button("知道了") { store.error = nil }
+            } message: { Text(store.error ?? "") }
     }
 
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

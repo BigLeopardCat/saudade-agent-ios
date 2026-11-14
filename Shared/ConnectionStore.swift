@@ -31,11 +31,18 @@ enum ConnectionStore {
     }
     static func setToken(_ token: String, origin: String) throws {
         let q = query(origin)
-        SecItemDelete(q as CFDictionary)
-        guard !token.isEmpty else { return }
+        guard !token.isEmpty else {
+            let status = SecItemDelete(q as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw AgentError.message("无法删除本机登录凭据。") }
+            return
+        }
+        let attributes: [String: Any] = [kSecValueData as String: Data(token.utf8),
+                                      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let updated = SecItemUpdate(q as CFDictionary, attributes as CFDictionary)
+        if updated == errSecSuccess { return }
+        guard updated == errSecItemNotFound else { throw AgentError.message("无法更新登录凭据，请重试。") }
         var value = q
-        value[kSecValueData as String] = Data(token.utf8)
-        value[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        value.merge(attributes) { _, new in new }
         guard SecItemAdd(value as CFDictionary, nil) == errSecSuccess else {
             throw AgentError.message("无法保存登录凭据，请重试。")
         }

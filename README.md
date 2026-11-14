@@ -55,7 +55,7 @@ open Lingyue.xcodeproj
 
 原生端审阅简单文本卡。图片、封面和批量卡保留在博客中审阅；浏览器导航、特效和编辑器命令不会在原生端执行。完整会话管理、后台推送和主动提醒尚未实现。当前定位为 MVP / Alpha，建议发布标签 `v0.2.0-alpha.1`，不等同于经过真机长期验证的稳定版。
 
-长回复合并刷新（通常 100ms，超过 32KiB 后 500ms），后台不逐字刷新 Markdown。单轮正文 128KiB，事件缓冲 256 帧，历史 80 条 / 通常不超过 512KiB，日志 200 条，图片缓存有数量及字节上限。头像只匿名读取同源 HTTPS，无 Cookie、Authorization 或重定向；Markdown 不联网加载外部图片，不执行 HTML 或脚本。详见 [诊断与版本核对](docs/SSE_INVESTIGATION.md)。
+长回复合并刷新（通常 100ms，超过 32KiB 后 500ms），后台不逐字刷新 Markdown。单轮正文 128KiB，事件缓冲 256 帧，历史 80 条 / 512KiB，日志 200 条，图片缓存有数量及字节上限。头像只匿名读取同源 HTTPS，无 Cookie、Authorization 或重定向；Markdown 不联网加载外部图片，不执行 HTML 或脚本。详见 [诊断与版本核对](docs/SSE_INVESTIGATION.md)。
 
 ## 许可与验证
 

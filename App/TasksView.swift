@@ -42,7 +42,7 @@ struct TasksView: View {
     @ViewBuilder private var pausedExecutions: some View {
         if let overview = store.overview, !overview.tasks.isEmpty {
             Section("暂停的 Agent 执行 · 继续审阅") {
-                ForEach(overview.tasks, id: \.self) { task in
+                ForEach(Array(overview.tasks.enumerated()), id: \.offset) { _, task in
                     VStack(alignment: .leading, spacing: 10) {
                         Text(task["title"].string ?? "待继续的 Agent 执行")
                         HStack {

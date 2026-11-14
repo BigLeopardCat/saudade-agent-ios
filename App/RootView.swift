@@ -12,7 +12,8 @@ struct RootView: View {
             SettingsView().tabItem { Label("连接", systemImage: "slider.horizontal.3") }.tag(3)
         }
         .onReceive(NotificationCenter.default.publisher(for: .companionEnded).receive(on: RunLoop.main)) { _ in store.companionEnded() }
-        .alert("泠月喵提示", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
+        .sheet(isPresented: $store.loginPresented) { BlogLoginView().environmentObject(store) }
+        .alert("泠月喵提示", isPresented: Binding(get: { store.error != nil && !store.loginPresented }, set: { if !$0 { store.error = nil } })) {
             Button("知道了") { store.error = nil }
         } message: { Text(store.error ?? "") }
     }
@@ -119,7 +120,6 @@ private struct OverviewView: View {
 
 private struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var showLogin = false
     var body: some View {
         NavigationStack {
             Form {
@@ -134,7 +134,7 @@ private struct SettingsView: View {
                         }
                     }.padding(.vertical, 8)
                     if let notice = store.identityNotice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
-                    Button(store.hasSession ? "切换账号或重新登录" : "登录我的博客") { showLogin = true }
+                    Button(store.hasSession ? "切换账号或重新登录" : "登录我的博客") { store.error = nil; store.loginPresented = true }
                         .disabled(store.busy || store.refreshing)
                     if store.hasSession {
                         Button("退出登录", role: .destructive) { Task { await store.logout() } }.disabled(store.busy || store.refreshing)
@@ -163,7 +163,6 @@ private struct SettingsView: View {
                     Link("美术资源许可", destination: URL(string: "https://github.com/BigLeopardCat/saudade-blog-agent/blob/main/frontend/ASSETS-LICENSE.md")!)
                 }
             }.navigationTitle("我的博客")
-                .sheet(isPresented: $showLogin) { BlogLoginView().environmentObject(store) }
         }
     }
 }
