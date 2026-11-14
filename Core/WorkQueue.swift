@@ -22,7 +22,9 @@ public struct WorkQueue: Sendable {
     public let items: [Item]
     public let issues: [String]
     public var total: Int? { counts.count == Kind.allCases.count ? counts.values.reduce(0, +) : nil }
-    public var knownTotal: Int { counts.values.reduce(0, +) }
+    public var knownTotal: Int {
+        Kind.allCases.reduce(0) { total, kind in total + max(counts[kind] ?? 0, items.filter { $0.kind == kind }.count) }
+    }
     public static let unavailable = WorkQueue(counts: [:], items: [], issues: ["人工待办尚未读取"])
     public static let demo = WorkQueue(counts: [.comments: 1, .board: 1, .quota: 0], items: [
         .init(kind: .comments, number: 101, author: "演示读者", preview: "文章很有帮助，期待下一篇。"),

@@ -18,7 +18,7 @@ struct ChatView: View {
                                 Text("我在呢，喵。").font(.title2.bold())
                                 Text(store.configuration.demo ? "本地演示 · 回复为预设内容" : "随便聊聊，或者把博客交给我看看。")
                                     .font(.subheadline).foregroundStyle(.secondary)
-                                ForEach(["看看服务器状态", "博客最近有什么动态", "演示一下审核事务"], id: \.self) { prompt in
+                                ForEach(["看看服务器状态", "博客最近有什么动态", "看看 Markdown 和表情", "演示一下审核事务"], id: \.self) { prompt in
                                     if store.configuration.demo || !prompt.contains("演示") {
                                         Button(prompt) { store.send(prompt) }.buttonStyle(.bordered).disabled(store.busy)
                                     }

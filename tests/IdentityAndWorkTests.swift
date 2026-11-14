@@ -43,5 +43,8 @@ final class IdentityAndWorkTests: XCTestCase {
         XCTAssertEqual(queue.knownTotal, 1)
         XCTAssertNil(queue.counts[.quota])
         XCTAssertFalse(queue.issues.isEmpty)
+        let partial = WorkQueue.project(summary: nil, comments: try json(#"{"data":[{"id":4,"approved":0,"content":"pending"}]}"#), board: nil, quota: nil)
+        XCTAssertNil(partial.total)
+        XCTAssertEqual(partial.knownTotal, 1) // Still surface known work when the aggregate endpoint fails.
     }
 }

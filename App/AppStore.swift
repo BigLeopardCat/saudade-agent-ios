@@ -371,6 +371,8 @@ final class AppStore: ObservableObject {
         let reply: String
         if approving != nil {
             reply = "演示确认已收到，喵。没有修改真实博客数据。"
+        } else if message.contains("Markdown") || message.contains("表情") {
+            reply = "## 我在这里，喵。\n\n这是 **原生 Markdown** 与离线贴纸演示。\n\n- 正文支持列表、引用和代码\n- 贴纸来自博客内置资源，无需联网\n\n> 今天也一起照看博客吧。\n\n:比心: ![收到](:收到:)\n\n行内代码保持原样：`:比心:`"
         } else if message.contains("审核") || message.contains("事务") {
             let now = Date().timeIntervalSince1970
             confirmationState.receive(try Confirmation(.object([
