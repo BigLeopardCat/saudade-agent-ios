@@ -8,3 +8,4 @@ build/
 xcuserdata/
 .env
 __pycache__/
+App/Assets.xcassets/AppIcon.appiconset/AppIcon.png

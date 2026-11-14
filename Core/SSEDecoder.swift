@@ -3,6 +3,7 @@ import Foundation
 public struct AgentEvent: Sendable {
     public let name: String
     public let data: JSONValue
+    public init(name: String, data: JSONValue) { self.name = name; self.data = data }
 }
 
 /// Bounded SSE framing. No automatic reconnect or request replay.
@@ -15,6 +16,8 @@ public struct SSEDecoder {
     private var previousCR = false
     public private(set) var terminal = false
     public private(set) var failed = false
+    public private(set) var lastEventName: String?
+    public private(set) var ignoredExtensionCount = 0
 
     public init() {}
 
@@ -41,12 +44,23 @@ public struct SSEDecoder {
             defer { name = ""; lines = []; size = 0 }
             guard !lines.isEmpty else { return nil }
             guard !terminal else { throw AgentError.protocolViolation }
+            let known = ["text", "error", "progress", "done", "text_reset", "confirmation", "command", "task_input", "pending", "receipts"]
+            lastEventName = known.contains(name) ? name : "extension"
+            // Extensions have no authority over text, completion, confirmation or client actions.
+            // Do not even decode their opaque payload; keep the framing and byte limits.
+            if !known.contains(name) {
+                guard name.utf8.count <= 128, name.utf8.allSatisfy({ $0 >= 33 && $0 <= 126 }) else {
+                    throw AgentError.protocolViolation
+                }
+                ignoredExtensionCount += 1
+                return nil
+            }
             let data = Data(lines.joined(separator: "\n").utf8)
             let value = try JSONDecoder().decode(JSONValue.self, from: data)
             switch name {
             case "text", "error": guard value.string != nil else { throw AgentError.protocolViolation }
             case "progress":
-                guard value.string != nil || value["text"].string != nil else { throw AgentError.protocolViolation }
+                guard value.string != nil || Self.validProgress(value) else { throw AgentError.protocolViolation }
             case "done", "text_reset":
                 guard value.object?.isEmpty == true else { throw AgentError.protocolViolation }
             case "confirmation":
@@ -54,11 +68,19 @@ public struct SSEDecoder {
             case "command":
                 guard ["navigate", "effect", "darkmode", "appearance", "article_editor"].contains(value["kind"].string ?? "")
                 else { throw AgentError.protocolViolation }
-            case "task_input": guard value["task_id"].string != nil else { throw AgentError.protocolViolation }
+            case "task_input":
+                guard let task = value["task_id"].string, !task.isEmpty, task.utf8.count <= 100,
+                      value["ready"].bool != nil || value["input"].object != nil || value["inputs"].array != nil
+                else { throw AgentError.protocolViolation }
+            case "pending":
+                guard value.object != nil else { throw AgentError.protocolViolation }
+            case "receipts":
+                guard let rows = value.array, rows.allSatisfy({ $0.object != nil }) else { throw AgentError.protocolViolation }
             default: throw AgentError.protocolViolation
             }
             if name == "done" || name == "error" { terminal = true; failed = name == "error" }
-            return AgentEvent(name: name, data: value)
+            // These are host-internal persistence controls, never client authorization.
+            return AgentEvent(name: name, data: ["pending", "receipts"].contains(name) ? .null : value)
         }
         size += line.utf8.count
         guard size <= 1_048_576 else { throw AgentError.frameTooLarge }
@@ -77,5 +99,15 @@ public struct SSEDecoder {
 
     public func finish() throws {
         guard terminal, lines.isEmpty, lineBytes.isEmpty else { throw AgentError.incompleteStream }
+    }
+
+    private static func validProgress(_ value: JSONValue) -> Bool {
+        guard Set(value.object?.keys.map { $0 } ?? []) == Set(["text", "work"]),
+              Set(value["work"].object?.keys.map { $0 } ?? []) == Set(["id", "stage", "status"]),
+              let text = value["text"].string, !text.isEmpty, text.unicodeScalars.count <= 300,
+              let id = value["work"]["id"].string, !id.isEmpty, id.unicodeScalars.count <= 128,
+              let stage = value["work"]["stage"].string, !stage.isEmpty, stage.unicodeScalars.count <= 64,
+              let status = value["work"]["status"].string else { return false }
+        return ["running", "waiting", "completed", "failed", "cancelled", "unknown"].contains(status)
     }
 }

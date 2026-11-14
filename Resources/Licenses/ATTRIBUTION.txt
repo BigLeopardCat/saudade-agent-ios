@@ -2,7 +2,13 @@
 Author and source: BigLeopardCat, https://github.com/BigLeopardCat/saudade-blog-agent
 Source revision: 6ec9688870e51582974034214db6a251fc433818
 Source file: frontend/public/live2d-widgets/lingyue-toggle.png
-This image is copied without modification.
+The original is preserved in Artwork/upstream-avatar-original.png.
+The current app/island heads are separate built-in image_gen adaptations of the
+reference supplied by the character owner. Exterior background and neck were removed
+for the transparent island head; the AppIcon uses a pale opaque background.
+The 24 bundled v2 stickers are unmodified assets from BigLeopardCat/Saudade-Blog,
+branch cn_sora_blog revision 0232e1eed7ca2724c108dde76d7d96aee0c8fda5.
+Original names, generation metadata and SHA256 hashes: Artwork/sticker-manifest.json.
 Artwork license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International.
 https://creativecommons.org/licenses/by-nc-sa/4.0/
 The accompanying ASSETS-LICENSE.md is the upstream project's original notice.

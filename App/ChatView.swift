@@ -18,7 +18,7 @@ struct ChatView: View {
                                 Text("我在呢，喵。").font(.title2.bold())
                                 Text(store.configuration.demo ? "本地演示 · 回复为预设内容" : "随便聊聊，或者把博客交给我看看。")
                                     .font(.subheadline).foregroundStyle(.secondary)
-                                ForEach(["看看服务器状态", "博客最近有什么动态", "演示一下审核事务"], id: \.self) { prompt in
+                                ForEach(["看看服务器状态", "博客最近有什么动态", "看看 Markdown 和表情", "演示一下审核事务"], id: \.self) { prompt in
                                     if store.configuration.demo || !prompt.contains("演示") {
                                         Button(prompt) { store.send(prompt) }.buttonStyle(.bordered).disabled(store.busy)
                                     }
@@ -30,12 +30,16 @@ struct ChatView: View {
                                 if message.user { Spacer(minLength: 34) }
                                 else { LingyueAvatar(size: 32) }
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(message.text.isEmpty ? "…" : message.text).textSelection(.enabled)
+                                    Text(message.user ? (store.configuration.demo ? "我 · 演示" : store.profile?.displayName ?? "我") : "泠月喵")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    if message.user { Text(verbatim: message.text).textSelection(.enabled) }
+                                    else { ChatMarkdown(text: message.text).equatable() }
                                     if message.incomplete { Label("本轮未完整结束", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary) }
                                 }
                                 .padding(15)
                                 .background(message.user ? Color.purple.opacity(0.13) : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
                                 if !message.user { Spacer(minLength: 12) }
+                                else { IdentityAvatar(profile: store.profile, origin: store.configuration.origin) }
                             }.id(message.id)
                         }
                         if let card = store.confirmation {
@@ -55,7 +59,7 @@ struct ChatView: View {
                         .lineLimit(1...5).focused($focused).padding(12)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
                         .disabled(store.busy)
-                    if store.busy {
+                    if store.receiving {
                         Button { store.stopReceiving() } label: { Image(systemName: "stop.circle.fill").font(.title) }
                             .accessibilityLabel("停止接收回复")
                     } else {
@@ -63,12 +67,15 @@ struct ChatView: View {
                             let message = draft; draft = ""; focused = false; store.send(message)
                         } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }
                         .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(store.busy)
                         .accessibilityLabel("发送消息")
                     }
                 }.padding(.horizontal, 18).padding(.vertical, 10).background(.regularMaterial)
             }
             .navigationTitle(store.configuration.demo ? "泠月喵 · 演示" : "泠月喵")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { store.observeChatVisibility(true) }
+            .onDisappear { store.observeChatVisibility(false) }
             .toolbar { Button("新对话", systemImage: "square.and.pencil") { store.newChat() }.disabled(store.busy) }
             .confirmationDialog("提交这项操作？", isPresented: Binding(get: { approving != nil }, set: { if !$0 { approving = nil } })) {
                 Button("确认提交") { if let card = approving { store.approve(card) }; approving = nil }
@@ -98,6 +105,12 @@ struct ChatView: View {
                 Text("这张卡需要图片审阅或批量选择，请在博客中继续。").font(.footnote)
                 Link("打开博客", destination: URL(string: store.configuration.origin)!)
             }
+            if store.confirmationState.requiresRefresh {
+                Text("上一轮未能确认完整结果。这张卡仅保留供核对，重新读取服务端状态后才能批准。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button("重新核对确认状态") { Task { await store.reloadConfirmation() } }
+                    .buttonStyle(.bordered).disabled(store.busy)
+            }
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 VStack(alignment: .leading, spacing: 10) {
                     if card.expired { Text("确认卡已过期，请到事务页重新读取。").font(.caption).foregroundStyle(.secondary) }
@@ -106,7 +119,8 @@ struct ChatView: View {
                             if option.value == "no" {
                                 Button(option.label) { Task { await store.cancelConfirmation(card) } }.buttonStyle(.bordered).disabled(store.busy)
                             } else if card.supportsNativeReview {
-                                Button(option.label) { approving = card }.buttonStyle(.borderedProminent).disabled(store.busy || card.expired)
+                                Button(option.label) { approving = card }.buttonStyle(.borderedProminent)
+                                    .disabled(store.busy || !store.confirmationState.canApprove(card))
                             }
                         }
                     }

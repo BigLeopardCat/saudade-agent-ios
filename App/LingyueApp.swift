@@ -10,8 +10,9 @@ struct LingyueApp: App {
             RootView()
                 .environmentObject(store)
                 .tint(Color(red: 0.52, green: 0.43, blue: 0.77))
-                .task { await store.refresh() }
+                .task { store.observeScene(scenePhase); await store.refresh() }
                 .onChange(of: scenePhase) { _, phase in
+                    store.observeScene(phase)
                     if phase == .active { Task { await store.refresh() } }
                 }
                 .onOpenURL { url in

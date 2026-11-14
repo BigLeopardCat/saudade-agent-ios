@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Toolchain
         run: |
           xcodebuild -version
@@ -26,25 +28,30 @@ jobs:
       - name: Generate Xcode project
         run: |
           brew install xcodegen
+          bash scripts/prepare_assets.sh
           xcodegen generate
       - name: Build simulator app and Live Activity extension
         run: |
           set -o pipefail
-          xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/simulator CODE_SIGNING_ALLOWED=NO build | tee simulator-build.log
+          xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/simulator CODE_SIGNING_ALLOWED=NO BUILD_SOURCE_COMMIT="$(git rev-parse HEAD)" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build | tee simulator-build.log
       - name: Build unsigned device app
         run: |
           set -o pipefail
-          xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO build | tee device-build.log
+          xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO BUILD_SOURCE_COMMIT="$(git rev-parse HEAD)" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build | tee device-build.log
       - name: Package unsigned IPA
         run: |
           mkdir -p build/package/Payload
           cp -R build/device/Build/Products/Release-iphoneos/Lingyue.app build/package/Payload/
           cd build/package
           zip -qry ../Lingyue-unsigned.ipa Payload
+          cd ../..
+          python3 scripts/verify_ipa.py build/Lingyue-unsigned.ipa --commit "$(git rev-parse HEAD)" --build "$GITHUB_RUN_NUMBER"
       - uses: actions/upload-artifact@v4
         with:
           name: Lingyue-unsigned-device
-          path: build/Lingyue-unsigned.ipa
+          path: |
+            build/Lingyue-unsigned.ipa
+            build/build-manifest.json
           retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()

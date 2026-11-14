@@ -20,6 +20,8 @@ struct LingyueIsland: Widget {
                 Spacer(minLength: 0)
                 Button(intent: RefreshCompanionIntent()) { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).accessibilityLabel("刷新博客状态")
+                Button(intent: EndCompanionIntent()) { Image(systemName: "xmark.circle") }
+                    .buttonStyle(.plain).accessibilityLabel("结束陪伴")
             }
             .padding(18)
             .activityBackgroundTint(Color(red: 0.11, green: 0.09, blue: 0.17))
@@ -44,6 +46,8 @@ struct LingyueIsland: Widget {
                                 .buttonStyle(.bordered)
                             Link(destination: URL(string: "lingyue://chat")!) { Label("和我聊聊", systemImage: "bubble.left") }
                                 .buttonStyle(.bordered)
+                            Button(intent: EndCompanionIntent()) { Image(systemName: "xmark.circle") }
+                                .buttonStyle(.bordered).accessibilityLabel("结束陪伴")
                             Spacer(minLength: 0)
                             if let count = context.state.pendingCount, count > 0 {
                                 Link(destination: URL(string: "lingyue://tasks")!) {

@@ -20,7 +20,9 @@ extension CompanionAttributes.ContentState {
         headline = overview.summary
         detail = overview.issues.isEmpty ? "\(overview.articles.count) 篇近期文章" : "部分信息未能更新，打开应用查看"
         healthy = overview.healthy
-        pendingCount = overview.tasksAvailable ? overview.tasks.count : nil
+        pendingCount = overview.work.total
+        if let count = pendingCount, count > 0 { detail = "\(count) 项人工审核待处理" }
+        if pendingCount == nil { detail = "人工待办数量待核对" }
         updatedAt = overview.observedAt
         self.demo = demo
     }
@@ -47,6 +49,22 @@ struct RefreshCompanionIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         let overview = try await ConnectionStore.overview()
         await CompanionActivity.update(.init(overview: overview, demo: ConnectionStore.load().demo))
+        return .result()
+    }
+}
+
+extension Notification.Name {
+    static let companionEnded = Notification.Name("site.saudade.lingyue.companionEnded")
+}
+
+struct EndCompanionIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "结束泠月喵陪伴"
+    static var openAppWhenRun = false
+
+    func perform() async throws -> some IntentResult {
+        UserDefaults.standard.set(UUID().uuidString, forKey: "lingyue.stopMarker")
+        NotificationCenter.default.post(name: .companionEnded, object: nil)
+        await CompanionActivity.end()
         return .result()
     }
 }
