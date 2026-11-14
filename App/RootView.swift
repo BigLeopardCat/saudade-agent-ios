@@ -8,9 +8,10 @@ struct RootView: View {
         TabView(selection: $store.selectedTab) {
             OverviewView().tabItem { Label("陪伴", systemImage: "moon.stars") }.tag(0)
             ChatView().tabItem { Label("对话", systemImage: "bubble.left.and.bubble.right") }.tag(1)
-            TasksView().tabItem { Label("事务", systemImage: "checklist") }.tag(2)
+            TasksView().tabItem { Label("事务", systemImage: "checklist") }.badge(store.overview?.work.knownTotal ?? 0).tag(2)
             SettingsView().tabItem { Label("连接", systemImage: "slider.horizontal.3") }.tag(3)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .companionEnded).receive(on: RunLoop.main)) { _ in store.companionEnded() }
         .alert("泠月喵提示", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了") { store.error = nil }
         } message: { Text(store.error ?? "") }
@@ -55,18 +56,27 @@ private struct OverviewView: View {
 
                     HStack(spacing: 12) {
                         Button { Task {
-                            if store.islandActive { await store.endIsland() }
+                            if store.islandActive || store.receiving { await store.endIsland() }
                             else { await store.startIsland() }
                         } } label: {
-                            Label(store.islandActive ? "结束陪伴" : "开始灵动岛陪伴", systemImage: store.islandActive ? "moon.zzz" : "sparkles")
+                            Label(store.islandActive || store.receiving ? "结束陪伴" : "开始灵动岛陪伴", systemImage: store.islandActive || store.receiving ? "moon.zzz" : "sparkles")
                                 .frame(maxWidth: .infinity).padding(.vertical, 6)
-                        }.buttonStyle(.borderedProminent).disabled(store.busy)
+                        }.buttonStyle(.borderedProminent).disabled(store.busy && !store.islandActive && !store.receiving)
                         Button { store.selectedTab = 1 } label: {
                             Image(systemName: "bubble.left").padding(.vertical, 6)
                         }.buttonStyle(.bordered).accessibilityLabel("和泠月喵聊天")
                     }
 
                     if let overview = store.overview {
+                        Button { store.selectedTab = 2 } label: {
+                            HStack {
+                                Label("需要你处理", systemImage: "tray.full")
+                                Spacer()
+                                Text(overview.work.total.map { "\($0) 项" } ?? "至少 \(overview.work.knownTotal) 项 · 部分未知")
+                                    .font(.subheadline)
+                                Image(systemName: "chevron.right").font(.caption)
+                            }.padding(18).background(.white, in: RoundedRectangle(cornerRadius: 20))
+                        }.buttonStyle(.plain)
                         if !overview.metrics.isEmpty {
                             HStack {
                                 ForEach(overview.metrics) { metric in
@@ -110,91 +120,127 @@ private struct OverviewView: View {
 private struct TasksView: View {
     @EnvironmentObject private var store: AppStore
     @State private var pendingCancellation: JSONValue?
-
     var body: some View {
         NavigationStack {
             List {
-                if store.configuration.demo {
-                    Section {
-                        Text("体验一次“准备 → 审阅 → 确认”的事务流程。演示不会修改博客。")
-                        Button("让泠月喵准备一项演示事务") { store.selectedTab = 1; store.send("演示一下审核事务") }
-                            .disabled(store.busy)
-                    }
+                Section {
+                    Text("评论、留言和额度申请等需要你人工决定的事项。读取和审阅不会自动批准。")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    if store.configuration.demo { Label("演示数据，不会修改博客", systemImage: "sparkles").font(.caption) }
                 }
-                Section("暂停的 Agent 任务") {
-                    if let overview = store.overview {
-                        if !overview.tasksAvailable { Label("任务服务暂时不可用", systemImage: "wifi.exclamationmark") }
-                        else if overview.tasks.isEmpty { Text("目前没有暂停任务").foregroundStyle(.secondary) }
-                        ForEach(Array(overview.tasks.enumerated()), id: \.offset) { _, task in
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text(task["title"].string ?? "待处理任务")
+                if let work = store.overview?.work {
+                    ForEach(WorkQueue.Kind.allCases, id: \.self) { kind in
+                        Section {
+                            let items = work.items.filter { $0.kind == kind }
+                            if items.isEmpty {
+                                Text(work.counts[kind] == 0 ? "暂无待处理事项" : "列表暂不可用，请刷新或到博客核对")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            ForEach(items) { item in
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack {
+                                        Text("#\(item.number) · \(item.author)").font(.subheadline.weight(.medium))
+                                        Spacer()
+                                        Text("待人工审阅").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Text(verbatim: item.preview).font(.subheadline).lineLimit(4)
+                                    Button("交给泠月喵读取完整内容") {
+                                        store.selectedTab = 1
+                                        store.send(store.configuration.demo ? "演示一下审核事务" : item.reviewPrompt)
+                                    }.buttonStyle(.bordered).disabled(store.busy)
+                                }.padding(.vertical, 5)
+                            }
+                            if let total = work.counts[kind], total > items.count {
+                                Text("展示最近 \(items.count) / \(total) 项，更多事项可在博客后台查看。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        } header: {
+                            Text("\(kind.title) · \(work.counts[kind].map(String.init) ?? "未知")")
+                        }
+                    }
+                    if !work.issues.isEmpty {
+                        Section("读取状态") {
+                            ForEach(work.issues, id: \.self) { Text($0).font(.footnote).foregroundStyle(.secondary) }
+                        }
+                    }
+                } else { Section { ProgressView("正在读取人工待办…") } }
+                if let overview = store.overview, !overview.tasks.isEmpty {
+                    Section("暂停的 Agent 执行 · 继续审阅") {
+                        ForEach(overview.tasks, id: \.self) { task in
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(task["title"].string ?? "待继续的 Agent 执行")
                                 HStack {
                                     Button("查看并审阅") { Task { await store.openTask(task) } }.buttonStyle(.bordered)
-                                    Button("取消任务", role: .destructive) { pendingCancellation = task }.buttonStyle(.bordered)
+                                    Button("取消执行", role: .destructive) { pendingCancellation = task }.buttonStyle(.bordered)
                                 }.disabled(store.busy)
-                            }.padding(.vertical, 6)
+                            }.padding(.vertical, 5)
                         }
-                    } else { ProgressView() }
+                    }
                 }
                 Section {
-                    Text("文本操作可在对话中确认。生图、封面和批量选择请回博客审阅。取消任务不会撤销已经发生的业务操作。")
+                    Link("前往博客后台", destination: URL(string: store.configuration.origin + "/dashboard")!)
+                    Text("生图、封面和批量选择请回博客审阅。取消接收或取消 Agent 执行不会撤销已经发生的业务操作。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-            }
-            .navigationTitle("事务")
-            .refreshable { await store.refresh() }
-            .confirmationDialog("取消这个暂停任务？", isPresented: Binding(get: { pendingCancellation != nil }, set: { if !$0 { pendingCancellation = nil } })) {
-                Button("取消任务", role: .destructive) {
-                    if let task = pendingCancellation { Task { await store.cancelTask(task) } }
-                    pendingCancellation = nil
-                }
-            } message: { Text("已执行的业务操作会保留。") }
+            }.navigationTitle("待处理事务")
+                .refreshable { await store.refresh() }
+                .confirmationDialog("取消这个暂停的 Agent 执行？", isPresented: Binding(get: { pendingCancellation != nil }, set: { if !$0 { pendingCancellation = nil } })) {
+                    Button("取消执行", role: .destructive) {
+                        if let task = pendingCancellation { Task { await store.cancelTask(task) } }
+                        pendingCancellation = nil
+                    }
+                } message: { Text("已执行的业务操作会保留。") }
         }
     }
 }
 
 private struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var origin = ""
-    @State private var username = ""
-    @State private var password = ""
-
+    @State private var showLogin = false
     var body: some View {
         NavigationStack {
             Form {
-                Section("当前连接") {
-                    Label(store.configuration.demo ? "本地演示" : store.configuration.origin, systemImage: store.configuration.demo ? "sparkles" : "network")
-                    if store.configuration.demo { Text("聊天和指标均为模拟数据。真实模式会连接你的博客与现有 Agent。").font(.footnote).foregroundStyle(.secondary) }
-                }
-                Section("登录博客") {
-                    TextField("https://你的博客", text: $origin).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("账号", text: $username).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    SecureField("密码", text: $password).textContentType(.password)
-                    Button(store.busy ? "连接中…" : "登录并连接") {
-                        let suppliedPassword = password
-                        password = ""
-                        Task { await store.connect(origin: origin, username: username, password: suppliedPassword) }
-                    }.disabled(store.busy || store.refreshing || username.isEmpty || password.isEmpty)
-                    if !store.configuration.demo {
+                Section {
+                    HStack(spacing: 16) {
+                        IdentityAvatar(profile: store.profile, origin: store.configuration.origin, size: 64)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(store.configuration.demo ? "本地演示" : store.profile?.displayName ?? (store.hasSession ? "已保存登录" : "尚未登录")).font(.headline)
+                            if let profile = store.profile { Text("@" + profile.username).font(.caption).foregroundStyle(.secondary) }
+                            Text(store.configuration.demo ? "模拟聊天与博客指标" : store.configuration.origin)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.padding(.vertical, 8)
+                    if let notice = store.identityNotice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
+                    Button(store.hasSession ? "切换账号或重新登录" : "登录我的博客") { showLogin = true }
+                        .disabled(store.busy || store.refreshing)
+                    if store.hasSession {
                         Button("退出登录", role: .destructive) { Task { await store.logout() } }.disabled(store.busy || store.refreshing)
                     }
+                    if !store.configuration.demo {
+                        Button("使用本地演示") { Task { await store.useDemo() } }.disabled(store.busy || store.refreshing)
+                    }
+                } footer: {
+                    Text("支持连接自己部署的兼容 Saudade Blog 与 Agent。密码仅用于登录，令牌保存在本机钥匙串。")
                 }
-                Section {
-                    Button("使用本地演示") { Task { await store.useDemo() } }.disabled(store.busy || store.refreshing)
-                    Text("登录凭据保存在本机钥匙串。服务器诊断需要管理员权限。").font(.footnote).foregroundStyle(.secondary)
+                Section("陪伴与电量") {
+                    Button("结束陪伴与当前接收", role: .destructive) { Task { await store.endIsland() } }
+                    Text("立即移除灵动岛和锁屏实时活动，停止当前接收。没有后台定时轮询；结束后仅在你主动使用 App 时联网。远端已经开始的操作可能仍会继续，需要核对结果。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("灵动岛不支持键盘输入。自由聊天会打开 App，展开区可直接刷新或结束陪伴。")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("关于泠月喵") {
                     LabeledContent("构建版本", value: BuildInfo.label).font(.footnote)
                     ShareLink("导出聊天诊断日志", item: ChatLogStore.shared.fileURL)
-                    Text("日志仅含请求编号、事件名、生命周期、错误代码与耗时，不含聊天正文或凭据。")
+                    Text("日志只含请求编号、事件名、生命周期、错误代码和耗时。聊天、确认凭据和令牌不会写入日志。")
                         .font(.footnote).foregroundStyle(.secondary)
                     LingyueAvatar(size: 90)
                     Text("形象：BigLeopardCat / saudade-blog-agent\n美术许可：CC BY-NC-SA 4.0").font(.footnote)
                     Link("原项目与美术署名", destination: URL(string: "https://github.com/BigLeopardCat/saudade-blog-agent")!)
                     Link("美术资源许可", destination: URL(string: "https://github.com/BigLeopardCat/saudade-blog-agent/blob/main/frontend/ASSETS-LICENSE.md")!)
                 }
-            }.navigationTitle("连接")
-                .onAppear { if origin.isEmpty { origin = store.configuration.origin } }
+            }.navigationTitle("我的博客")
+                .sheet(isPresented: $showLogin) { BlogLoginView().environmentObject(store) }
         }
     }
 }

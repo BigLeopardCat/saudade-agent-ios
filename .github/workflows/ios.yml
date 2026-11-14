@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Toolchain
         run: |
           xcodebuild -version
@@ -26,6 +28,7 @@ jobs:
       - name: Generate Xcode project
         run: |
           brew install xcodegen
+          bash scripts/prepare_assets.sh
           xcodegen generate
       - name: Build simulator app and Live Activity extension
         run: |
@@ -41,10 +44,14 @@ jobs:
           cp -R build/device/Build/Products/Release-iphoneos/Lingyue.app build/package/Payload/
           cd build/package
           zip -qry ../Lingyue-unsigned.ipa Payload
+          cd ../..
+          python3 scripts/verify_ipa.py build/Lingyue-unsigned.ipa --commit "$(git rev-parse HEAD)" --build "$GITHUB_RUN_NUMBER"
       - uses: actions/upload-artifact@v4
         with:
           name: Lingyue-unsigned-device
-          path: build/Lingyue-unsigned.ipa
+          path: |
+            build/Lingyue-unsigned.ipa
+            build/build-manifest.json
           retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()

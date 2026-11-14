@@ -30,12 +30,16 @@ struct ChatView: View {
                                 if message.user { Spacer(minLength: 34) }
                                 else { LingyueAvatar(size: 32) }
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(message.text.isEmpty ? "…" : message.text).textSelection(.enabled)
+                                    Text(message.user ? (store.configuration.demo ? "我 · 演示" : store.profile?.displayName ?? "我") : "泠月喵")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    if message.user { Text(verbatim: message.text).textSelection(.enabled) }
+                                    else { ChatMarkdown(text: message.text).equatable() }
                                     if message.incomplete { Label("本轮未完整结束", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary) }
                                 }
                                 .padding(15)
                                 .background(message.user ? Color.purple.opacity(0.13) : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
                                 if !message.user { Spacer(minLength: 12) }
+                                else { IdentityAvatar(profile: store.profile, origin: store.configuration.origin) }
                             }.id(message.id)
                         }
                         if let card = store.confirmation {

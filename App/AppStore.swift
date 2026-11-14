@@ -25,12 +25,21 @@ final class AppStore: ObservableObject {
     @Published var error: String?
     @Published var islandActive = !Activity<CompanionAttributes>.activities.isEmpty
     @Published var currentConversation: Int?
+    @Published private(set) var profile: UserProfile?
+    @Published private(set) var identityNotice: String?
+    @Published private(set) var hasSession = false
     private var generation = UUID()
     private var streamTask: Task<Void, Never>?
     private var activeStream: ManagedChatStream?
     private var activeTrace: ChatTrace?
     private var currentScene = "unknown"
     private var chatVisible = false
+    private var stopMarker = UserDefaults.standard.string(forKey: "lingyue.stopMarker")
+    private var pendingText = ""
+    private var streamingIndex: Int?
+    private var lastTextPublish: TimeInterval = 0
+
+    init() { hasSession = !configuration.demo && !ConnectionStore.token(for: configuration.origin).isEmpty }
 
     func observeScene(_ scene: ScenePhase) {
         switch scene {
@@ -41,11 +50,18 @@ final class AppStore: ObservableObject {
         }
         // Observation only. Suspension or network loss is diagnosed separately, not labelled user-stop.
         activeTrace?.lifecycle(scene: currentScene, chatVisible: chatVisible)
+        if scene == .active {
+            flushText()
+            let marker = UserDefaults.standard.string(forKey: "lingyue.stopMarker")
+            if marker != stopMarker { stopMarker = marker; stopReceiving() }
+            islandActive = !Activity<CompanionAttributes>.activities.isEmpty
+        }
     }
 
     func observeChatVisibility(_ visible: Bool) {
         chatVisible = visible
         activeTrace?.lifecycle(scene: currentScene, chatVisible: visible)
+        if visible { flushText() }
     }
 
     func refresh() async {
@@ -54,6 +70,17 @@ final class AppStore: ObservableObject {
         let current = generation
         defer { refreshing = false }
         do {
+            if !configuration.demo {
+                do {
+                    let value = try await ConnectionStore.client(configuration).json("/api/protected/profile")
+                    guard generation == current else { return }
+                    profile = try UserProfile(value); identityNotice = nil
+                } catch {
+                    guard generation == current else { return }
+                    identityNotice = "登录状态暂未核对成功，请检查网络或重新登录。"
+                    if let http = error as? HTTPFailure, [401, 403].contains(http.status) { profile = nil }
+                }
+            }
             let result = try await ConnectionStore.overview()
             guard generation == current else { return }
             overview = result
@@ -79,7 +106,12 @@ final class AppStore: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
 
-    func endIsland() async { await CompanionActivity.end(); islandActive = false }
+    func endIsland() async {
+        stopReceiving()
+        await CompanionActivity.end(); islandActive = false
+    }
+
+    func companionEnded() { stopReceiving(); islandActive = false }
 
     func connect(origin: String, username: String, password: String) async {
         guard !busy, !refreshing else { return }
@@ -93,9 +125,10 @@ final class AppStore: ObservableObject {
             guard let token = response["data"].string, !token.isEmpty else { throw AgentError.invalidResponse }
             // Verify the issued login before committing the connection locally.
             let authenticated = BlogClient(connection: try BlogConnection(origin: canonical, token: token))
-            _ = try await authenticated.json("/api/protected/profile")
+            let identity = try UserProfile(await authenticated.json("/api/protected/profile"))
             try ConnectionStore.setToken(token, origin: canonical)
             await changeConfiguration(.init(demo: false, origin: canonical))
+            profile = identity
             await refresh()
         } catch { self.error = error.localizedDescription }
     }
@@ -119,7 +152,9 @@ final class AppStore: ObservableObject {
         generation = UUID()
         await endIsland()
         confirmationState.clear(); currentConversation = nil; messages = []; overview = nil; error = nil
+        profile = nil; identityNotice = nil
         configuration = value
+        hasSession = !value.demo && !ConnectionStore.token(for: value.origin).isEmpty
         do { try ConnectionStore.save(value) } catch { self.error = error.localizedDescription }
     }
 
@@ -174,6 +209,7 @@ final class AppStore: ObservableObject {
                 guard let text = $0["content"].string, let role = $0["role"].string else { return nil }
                 return Message(user: role == "user", text: text)
             }
+            trimTranscript()
             confirmationState.clear()
             if card["confirmation"] != .null {
                 let restored = try Confirmation(card["confirmation"])
@@ -205,9 +241,13 @@ final class AppStore: ObservableObject {
         trace.lifecycle(scene: currentScene, chatVisible: chatVisible)
         let index = messages.count
         messages.append(Message(user: false, text: ""))
+        streamingIndex = index; pendingText = ""; lastTextPublish = 0
         streamTask = Task {
             var completed = false
             defer {
+                flushText()
+                streamingIndex = nil; pendingText = ""
+                trimTranscript()
                 activeStream?.cancel(.consumerEnded)
                 activeStream = nil; activeTrace = nil
                 busy = false; receiving = false; progress = ""; streamTask = nil
@@ -234,8 +274,8 @@ final class AppStore: ObservableObject {
                         for try await event in stream.events {
                             try Task.checkCancellation()
                             switch event.name {
-                            case "text": messages[index].text += event.data.string ?? ""
-                            case "text_reset": messages[index].text = ""
+                            case "text": try appendText(event.data.string ?? "")
+                            case "text_reset": pendingText = ""; flushText()
                             case "progress": progress = event.data.string ?? event.data["text"].string ?? "处理中…"
                             case "confirmation": confirmationState.receive(try Confirmation(event.data))
                             case "command": progress = "这一步需要在博客页面继续。"
@@ -249,11 +289,15 @@ final class AppStore: ObservableObject {
                     }
                 }
                 guard completed else { throw AgentError.incompleteStream }
+                flushText()
+                streamingIndex = nil
                 if let approving { confirmationState.finishApproval(approving) }
                 if messages[index].text.isEmpty { messages[index].text = confirmation == nil ? "本轮已结束。" : "有一项操作需要你审阅。" }
                 receiving = false
                 await refresh()
             } catch {
+                flushText()
+                streamingIndex = nil
                 messages[index].incomplete = true
                 if messages[index].text.isEmpty { messages[index].text = "本轮未完整结束。" }
                 confirmationState.interrupt()
@@ -265,6 +309,25 @@ final class AppStore: ObservableObject {
                 self.error = "\(detail)\n请求编号：\(trace.requestID)"
             }
         }
+    }
+
+    private func appendText(_ text: String) throws {
+        guard pendingText.utf8.count + text.utf8.count <= 131_072 else { throw AgentError.frameTooLarge }
+        pendingText += text
+        let now = ProcessInfo.processInfo.systemUptime
+        if currentScene == "active", chatVisible, now - lastTextPublish >= 0.1 { flushText() }
+    }
+
+    private func flushText() {
+        guard let index = streamingIndex, messages.indices.contains(index) else { return }
+        if messages[index].text != pendingText { messages[index].text = pendingText }
+        lastTextPublish = ProcessInfo.processInfo.systemUptime
+    }
+
+    private func trimTranscript() {
+        if messages.count > 80 { messages.removeFirst(messages.count - 80) }
+        var bytes = messages.reduce(0) { $0 + $1.text.utf8.count }
+        while messages.count > 1, bytes > 524_288 { bytes -= messages.removeFirst().text.utf8.count }
     }
 
     func stopReceiving() {
@@ -320,7 +383,7 @@ final class AppStore: ObservableObject {
         }
         for character in reply {
             try await Task.sleep(for: .milliseconds(18))
-            messages[index].text.append(character)
+            try appendText(String(character))
         }
     }
 }
