@@ -13,7 +13,7 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .companionEnded).receive(on: RunLoop.main)) { _ in store.companionEnded() }
         .sheet(isPresented: $store.loginPresented) { BlogLoginView().environmentObject(store) }
-        .alert("泠月喵提示", isPresented: Binding(get: { store.error != nil && !store.loginPresented }, set: { if !$0 { store.error = nil } })) {
+        .alert("泠月喵提示", isPresented: Binding(get: { store.error != nil && !store.loginPresented && !store.conversationsPresented }, set: { if !$0 { store.error = nil } })) {
             Button("知道了") { store.error = nil }
         } message: { Text(store.error ?? "") }
     }

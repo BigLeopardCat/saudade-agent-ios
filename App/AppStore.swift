@@ -5,13 +5,7 @@ import SwiftUI
 
 @MainActor
 final class AppStore: ObservableObject {
-    struct Message: Identifiable {
-        let id: UUID
-        let user: Bool
-        var text: String
-        var incomplete = false
-        init(user: Bool, text: String) { id = UUID(); self.user = user; self.text = text }
-    }
+    typealias Message = ChatMessage
     @Published var configuration = ConnectionStore.load()
     @Published var overview: Overview?
     @Published var messages: [Message] = []
@@ -29,6 +23,25 @@ final class AppStore: ObservableObject {
     @Published private(set) var identityNotice: String?
     @Published private(set) var hasSession = false
     @Published var loginPresented = false
+    @Published var conversationsPresented = false
+    @Published var composerDraft = ""
+    @Published private(set) var conversations: [Conversation] = []
+    @Published private(set) var loadingConversations = false
+    @Published private(set) var conversationListError: String?
+    @Published private(set) var historyNotice: String?
+    @Published private(set) var viewingEarlierHistory = false
+    @Published private(set) var historyScrollAnchor: String?
+    private var historyWindow: HistoryWindow?
+    private var listRequest = UUID()
+    private var conversationSelectionInitialized = false
+    private var drafts: [Int: String] = [:]
+    private var draftOrder: [Int] = []
+    private var reviews: [Int: ConfirmationReviewState] = [:]
+    private var reviewOrder: [Int] = []
+    private var demoHistories: [Int: [Message]] = [:]
+    private var nextDemoID = -1
+    var conversationTitle: String { conversations.first { $0.id == currentConversation }?.displayTitle ?? (currentConversation == nil ? "新对话" : "泠月喵") }
+    var hasOlderHistory: Bool { historyWindow?.mayHaveOlder == true }
     private var generation = UUID()
     private var streamTask: Task<Void, Never>?
     private var activeStream: ManagedChatStream?
@@ -157,6 +170,11 @@ final class AppStore: ObservableObject {
         await endIsland()
         confirmationState.clear(); currentConversation = nil; messages = []; overview = nil; error = nil
         profile = nil; identityNotice = nil
+        conversations = []; drafts = [:]; reviews = [:]; demoHistories = [:]
+        conversationsPresented = false
+        draftOrder = []; reviewOrder = []; composerDraft = ""; historyWindow = nil
+        conversationSelectionInitialized = false; listRequest = UUID(); loadingConversations = false
+        conversationListError = nil; historyNotice = nil; viewingEarlierHistory = false; nextDemoID = -1
         configuration = value
         hasSession = !value.demo && !ConnectionStore.token(for: value.origin).isEmpty
         do { try ConnectionStore.save(value) } catch { self.error = error.localizedDescription }
@@ -164,20 +182,34 @@ final class AppStore: ObservableObject {
 
     func newChat() {
         guard !busy else { return }
+        rememberSession()
+        activateFreshDraft()
+    }
+
+    private func activateFreshDraft() {
+        conversationSelectionInitialized = true
         confirmationState.clear(); currentConversation = nil; messages = []; progress = ""
+        composerDraft = drafts[0] ?? ""; historyWindow = nil; viewingEarlierHistory = false
+        historyNotice = nil; historyScrollAnchor = nil
     }
 
     func send(_ text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !busy, !text.isEmpty else { return }
+        guard !viewingEarlierHistory else { error = "请先回到最新消息，再发送或处理事务。"; return }
         guard text.unicodeScalars.count <= 4000 else { error = "每条消息最多 4000 字。"; return }
+        if configuration.demo, currentConversation == nil, conversations.count >= 20 {
+            error = "本地演示最多保留 20 个会话，请删除一个后再试。真实会话由博客保存。"; return
+        }
+        composerDraft = ""; drafts[currentConversation ?? 0] = nil
+        conversationSelectionInitialized = true
         messages.append(Message(user: true, text: text))
         confirmationState.clear()
         startStream(message: text)
     }
 
     func approve(_ card: Confirmation) {
-        guard !busy, confirmationState.canApprove(card) else { return }
+        guard !busy, !viewingEarlierHistory, confirmationState.canApprove(card) else { return }
         confirmationState.beginApproval()
         startStream(message: "", approving: card)
     }
@@ -199,29 +231,9 @@ final class AppStore: ObservableObject {
     }
 
     func openTask(_ task: JSONValue) async {
-        guard !busy, let cid = task["conversation_id"].int, let id = task["task_id"].string else { return }
-        busy = true; defer { busy = false }
-        do {
-            let client = try ConnectionStore.client(configuration)
-            let history = try await client.json("/api/chat/history?conversation_id=\(cid)")
-            let card = try await client.json("/api/chat/task/confirmation", body: .object([
-                "conversation_id": .number(Double(cid)), "task_id": .string(id)
-            ]))
-            guard let items = history["items"].array else { throw AgentError.invalidResponse }
-            currentConversation = cid
-            messages = items.compactMap {
-                guard let text = $0["content"].string, let role = $0["role"].string else { return nil }
-                return Message(user: role == "user", text: text)
-            }
-            trimTranscript()
-            confirmationState.clear()
-            if card["confirmation"] != .null {
-                let restored = try Confirmation(card["confirmation"])
-                guard restored.taskID == id && card["task_id"].string == id else { throw AgentError.protocolViolation }
-                confirmationState.receive(restored)
-            }
-            selectedTab = 1
-        } catch { self.error = error.localizedDescription }
+        guard let cid = task["conversation_id"].int, let id = task["task_id"].string else { return }
+        await openConversation(cid, taskID: id)
+        if currentConversation == cid { selectedTab = 1 }
     }
 
     func cancelTask(_ task: JSONValue) async {
@@ -258,6 +270,10 @@ final class AppStore: ObservableObject {
             }
             do {
                 if configuration.demo {
+                    if currentConversation == nil {
+                        currentConversation = nextDemoID; nextDemoID -= 1
+                        conversations.insert(.init(id: currentConversation!, title: String(message.prefix(32)), createdAt: Date(), updatedAt: Date()), at: 0)
+                    }
                     try await demoReply(message: message, approving: approving, index: index)
                     completed = true
                     trace.event("done"); trace.finish()
@@ -298,6 +314,13 @@ final class AppStore: ObservableObject {
                 if let approving { confirmationState.finishApproval(approving) }
                 if messages[index].text.isEmpty { messages[index].text = confirmation == nil ? "本轮已结束。" : "有一项操作需要你审阅。" }
                 receiving = false
+                if configuration.demo {
+                    demoHistories[currentConversation!] = messages
+                    if let row = conversations.firstIndex(where: { $0.id == currentConversation }) { conversations[row].updatedAt = Date() }
+                } else if currentScene == "active", let cid = currentConversation {
+                    await synchronizeRecentHistory(cid)
+                    await loadConversations()
+                }
                 await refresh()
             } catch {
                 flushText()
@@ -311,6 +334,9 @@ final class AppStore: ObservableObject {
                 let cancelled = error is CancellationError || (ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled)
                 let detail = cancelled ? "接收已取消；远端可能仍在处理，请核对事务状态。" : error.localizedDescription
                 self.error = "\(detail)\n请求编号：\(trace.requestID)"
+                historyWindow = nil
+                historyNotice = "本轮结果未完整确认。切换回来时会重新读取历史和确认状态。"
+                if configuration.demo, let cid = currentConversation { demoHistories[cid] = messages }
             }
         }
     }
@@ -330,13 +356,9 @@ final class AppStore: ObservableObject {
     }
 
     private func trimTranscript() {
-        if messages.count > 80 { messages.removeFirst(messages.count - 80) }
+        if messages.count > HistoryWindow.maximumMessages { messages.removeFirst(messages.count - HistoryWindow.maximumMessages) }
         var bytes = messages.reduce(0) { $0 + $1.text.utf8.count }
-        while messages.count > 1, bytes > 524_288 { bytes -= messages.removeFirst().text.utf8.count }
-        if messages.count == 1, messages[0].text.utf8.count > 524_288 {
-            let tail = String(decoding: messages[0].text.utf8.suffix(520_000), as: UTF8.self)
-            messages[0].text = "【本机仅显示这条长历史消息的末尾，完整内容请到博客查看。】\n\n" + tail
-        }
+        while messages.count > 1, bytes > HistoryWindow.maximumBytes { bytes -= messages.removeFirst().text.utf8.count }
     }
 
     func stopReceiving() {
@@ -367,7 +389,6 @@ final class AppStore: ObservableObject {
     }
 
     private func demoReply(message: String, approving: Confirmation?, index: Int) async throws {
-        currentConversation = -1
         let reply: String
         if approving != nil {
             reply = "演示确认已收到，喵。没有修改真实博客数据。"
@@ -396,5 +417,178 @@ final class AppStore: ObservableObject {
             try await Task.sleep(for: .milliseconds(18))
             try appendText(String(character))
         }
+    }
+}
+
+extension AppStore {
+    private func rememberSession() {
+        let key = currentConversation ?? 0
+        drafts[key] = String(composerDraft.unicodeScalars.prefix(4000))
+        draftOrder.removeAll { $0 == key }; draftOrder.append(key)
+        while draftOrder.count > 20 { drafts[draftOrder.removeFirst()] = nil }
+        guard let cid = currentConversation else { return }
+        if configuration.demo { demoHistories[cid] = messages }
+        if confirmation != nil {
+            var state = confirmationState; state.interrupt(); reviews[cid] = state
+            reviewOrder.removeAll { $0 == cid }; reviewOrder.append(cid)
+            while reviewOrder.count > 8 { reviews[reviewOrder.removeFirst()] = nil }
+        } else { reviews[cid] = nil; reviewOrder.removeAll { $0 == cid } }
+    }
+
+    func clampDraft() {
+        if composerDraft.unicodeScalars.count > 4000 {
+            composerDraft = String(composerDraft.unicodeScalars.prefix(4000))
+            error = "每条消息最多 4000 字，超出部分未填入。"
+        }
+    }
+
+    func prepareConversations() async {
+        await loadConversations()
+        guard !conversationSelectionInitialized, !loadingConversations, conversationListError == nil,
+              !busy, currentConversation == nil, messages.isEmpty else { return }
+        conversationSelectionInitialized = true
+        if let latest = conversations.first { await openConversation(latest.id) }
+    }
+
+    func loadConversations() async {
+        guard !loadingConversations else { return }
+        if configuration.demo { conversationListError = nil; return }
+        let requestID = UUID(); listRequest = requestID
+        let scope = generation
+        loadingConversations = true
+        defer { if listRequest == requestID { loadingConversations = false } }
+        do {
+            let response = try await ConnectionStore.client(configuration).json("/api/chat/conversations")
+            let rows = try Conversation.list(response)
+            guard generation == scope, listRequest == requestID else { return }
+            conversations = rows; conversationListError = nil
+        } catch {
+            guard generation == scope, listRequest == requestID else { return }
+            conversationListError = error.localizedDescription
+        }
+    }
+
+    private func currentCard(_ client: BlogClient, cid: Int, taskID: String?) async -> Result<CurrentConfirmation, Error> {
+        do {
+            var body: [String: JSONValue] = ["conversation_id": .number(Double(cid))]
+            if let taskID { body["task_id"] = .string(taskID) }
+            let response = try await client.json("/api/chat/task/confirmation", body: .object(body))
+            return .success(try CurrentConfirmation(response, taskID: taskID))
+        } catch { return .failure(error) }
+    }
+
+    func openConversation(_ cid: Int, taskID: String? = nil) async {
+        guard !busy else { return }
+        if configuration.demo {
+            guard conversations.contains(where: { $0.id == cid }) else { return }
+            rememberSession()
+            currentConversation = cid; messages = demoHistories[cid] ?? []
+            confirmationState = reviews[cid] ?? .init()
+            composerDraft = drafts[cid] ?? ""; historyWindow = nil
+            viewingEarlierHistory = false; historyNotice = nil; historyScrollAnchor = nil
+            conversationSelectionInitialized = true
+            return
+        }
+        guard cid > 0 else { return }
+        busy = true; defer { busy = false }
+        let scope = generation
+        do {
+            let client = try ConnectionStore.client(configuration)
+            async let projection = currentCard(client, cid: cid, taskID: taskID)
+            let page = try await client.history(conversationID: cid)
+            let result = await projection
+            guard generation == scope else { return }
+            rememberSession()
+            let window = try HistoryWindow(page: page)
+            currentConversation = cid; historyWindow = window; messages = window.items
+            composerDraft = drafts[cid] ?? ""; viewingEarlierHistory = false
+            historyNotice = nil; historyScrollAnchor = nil; conversationSelectionInitialized = true
+            confirmationState = reviews[cid] ?? .init()
+            switch result {
+            case .success(let projection):
+                if let card = projection.card { confirmationState.receive(card) }
+                else { confirmationState.clear() }
+            case .failure:
+                confirmationState.interrupt()
+                historyNotice = "历史已载入，当前确认状态暂未核对成功。已保留的卡仅供查看，请重新核对后批准。"
+            }
+        } catch { if generation == scope { self.error = error.localizedDescription } }
+    }
+
+    func loadEarlierHistory() async {
+        guard !busy, let cid = currentConversation, var window = historyWindow,
+              window.mayHaveOlder, let before = window.oldestID else { return }
+        busy = true; defer { busy = false }
+        let scope = generation
+        let anchor = messages.first?.id
+        do {
+            let page = try await ConnectionStore.client(configuration).history(conversationID: cid, beforeID: before)
+            guard generation == scope, currentConversation == cid else { return }
+            try window.prepend(page)
+            if !page.items.isEmpty { viewingEarlierHistory = true }
+            historyWindow = window; messages = window.items
+            historyNotice = window.droppedNewer ? "仅保留当前历史窗口，回到最新后可继续聊天。" : nil
+            historyScrollAnchor = anchor
+        } catch { if generation == scope { self.error = error.localizedDescription } }
+    }
+
+    func returnToLatest() async {
+        guard let cid = currentConversation else { return }
+        await openConversation(cid)
+    }
+
+    private func synchronizeRecentHistory(_ cid: Int) async {
+        let scope = generation
+        do {
+            let page = try await ConnectionStore.client(configuration).history(conversationID: cid)
+            guard generation == scope, currentConversation == cid else { return }
+            guard !page.items.isEmpty else { throw AgentError.invalidResponse }
+            let window = try HistoryWindow(page: page)
+            historyWindow = window; messages = window.items; historyNotice = nil
+        } catch {
+            historyWindow = nil
+            historyNotice = "最新历史暂未同步，当前回复仍保留在本机。可重新读取最新记录；不会重发消息。"
+        }
+    }
+
+    func updateConversation(_ conversation: Conversation, title: String? = nil, pinned: Bool? = nil) async {
+        guard !busy, title != nil || pinned != nil else { return }
+        let title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let title, title.isEmpty || title.unicodeScalars.count > 64 { error = "会话标题请填写 1–64 字。"; return }
+        busy = true; defer { busy = false }
+        listRequest = UUID(); loadingConversations = false
+        do {
+            if !configuration.demo {
+                var body: [String: JSONValue] = [:]
+                if let title { body["title"] = .string(title) }
+                if let pinned { body["pinned"] = .bool(pinned) }
+                let response = try await ConnectionStore.client(configuration).json("/api/chat/conversations/\(conversation.id)", body: .object(body), method: .patch)
+                guard response["success"].bool == true else { throw AgentError.invalidResponse }
+            }
+            if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+                if let title { conversations[index].title = title }
+                if let pinned { conversations[index].pinned = pinned }
+            }
+            if configuration.demo {
+                conversations.sort { a, b in a.pinned != b.pinned ? a.pinned : (a.updatedAt ?? .distantPast) > (b.updatedAt ?? .distantPast) }
+            } else { await loadConversations() }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func deleteConversation(_ conversation: Conversation) async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }
+        listRequest = UUID(); loadingConversations = false
+        do {
+            if !configuration.demo {
+                let response = try await ConnectionStore.client(configuration).json("/api/chat/conversations/\(conversation.id)", method: .delete)
+                guard response["success"].bool == true else { throw AgentError.invalidResponse }
+            }
+            conversations.removeAll { $0.id == conversation.id }
+            drafts[conversation.id] = nil; reviews[conversation.id] = nil; demoHistories[conversation.id] = nil
+            draftOrder.removeAll { $0 == conversation.id }; reviewOrder.removeAll { $0 == conversation.id }
+            if currentConversation == conversation.id { activateFreshDraft() }
+            if !configuration.demo { await loadConversations() }
+        } catch { self.error = error.localizedDescription }
     }
 }
