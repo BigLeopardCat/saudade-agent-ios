@@ -57,7 +57,8 @@ struct ChatView: View {
                     }.padding().background(.regularMaterial)
                 } else {
                 HStack(alignment: .bottom, spacing: 12) {
-                    TextField("和泠月喵说点什么…", text: $store.composerDraft, axis: .vertical)
+                    TextField("和泠月喵说点什么…", text: draftBinding, axis: .vertical)
+                        .id(store.currentConversation ?? 0)
                         .accessibilityIdentifier("chat.composer")
                         .lineLimit(1...5).focused($focused).padding(12)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
@@ -97,6 +98,12 @@ struct ChatView: View {
                 Button("确认提交") { if let card = approving { store.approve(card) }; approving = nil }
             } message: { Text(approving?.question ?? "") }
         }
+    }
+
+    private var draftBinding: Binding<String> {
+        let cid = store.currentConversation
+        return Binding(get: { store.currentConversation == cid ? store.composerDraft : "" },
+                       set: { store.setComposerDraft($0, conversationID: cid) })
     }
 
     @ViewBuilder private var historyControls: some View {

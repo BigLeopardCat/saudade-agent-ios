@@ -442,6 +442,13 @@ extension AppStore {
         }
     }
 
+    func setComposerDraft(_ value: String, conversationID: Int?) {
+        // A dismissed/reused UIKit editor may commit its previous buffer late.
+        // Such an edit must never land in the newly selected conversation.
+        guard currentConversation == conversationID else { return }
+        composerDraft = value
+    }
+
     func prepareConversations() async {
         await loadConversations()
         guard !conversationSelectionInitialized, !loadingConversations, conversationListError == nil,
