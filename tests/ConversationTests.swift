@@ -4,10 +4,14 @@ import XCTest
 
 final class ConversationTests: XCTestCase {
     private func page(cid: Int = 7, start: Int, count: Int = 50, content: String = "hello") throws -> ChatHistoryPage {
-        let rows: [JSONValue] = (start..<(start + count)).map { id in .object([
-            "id": .number(Double(id)), "role": .string(id % 2 == 0 ? "assistant" : "user"),
-            "content": .string(content), "time": .number(1_700_000_000_000 + Double(id) * 1000), "images": .array([])
-        ]) }
+        var rows: [JSONValue] = []
+        for id in start..<(start + count) {
+            let role = id % 2 == 0 ? "assistant" : "user"
+            let timestamp: Double = 1_700_000_000_000.0 + Double(id) * 1000.0
+            let fields: [String: JSONValue] = ["id": .number(Double(id)), "role": .string(role),
+                "content": .string(content), "time": .number(timestamp), "images": .array([])]
+            rows.append(.object(fields))
+        }
         return try JSONDecoder().decode(ChatHistoryPage.self, from: JSONEncoder().encode(JSONValue.object([
             "conversation_id": .number(Double(cid)), "count": .number(Double(count)), "items": .array(rows)
         ])))

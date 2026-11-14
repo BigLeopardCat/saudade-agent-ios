@@ -447,7 +447,11 @@ extension AppStore {
         guard !conversationSelectionInitialized, !loadingConversations, conversationListError == nil,
               !busy, currentConversation == nil, messages.isEmpty else { return }
         conversationSelectionInitialized = true
-        if let latest = conversations.first { await openConversation(latest.id) }
+        let latest = conversations.max { a, b in
+            let left = a.updatedAt ?? .distantPast; let right = b.updatedAt ?? .distantPast
+            return left == right ? a.id < b.id : left < right
+        }
+        if let latest { await openConversation(latest.id) }
     }
 
     func loadConversations() async {
