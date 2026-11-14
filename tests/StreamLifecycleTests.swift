@@ -142,6 +142,15 @@ final class StreamLifecycleTests: XCTestCase {
         XCTAssertFalse(trace.snapshot.receivedDone)
     }
 
+    func testJSONResponseIsBoundedDuringDownloadAndClosesItsConnection() async throws {
+        let stopped = expectation(description: "oversized JSON closes HTTP")
+        let scenario = Scenario(wire: String(repeating: "x", count: 2_097_153), onStop: { stopped.fulfill() })
+        do { _ = try await client(scenario).json("/api/protected/profile"); XCTFail("Must reject oversized body") }
+        catch { XCTAssertEqual(error as? AgentError, .frameTooLarge) }
+        await fulfillment(of: [stopped], timeout: 3)
+        XCTAssertEqual(scenario.count, 1)
+    }
+
     func testSceneAndViewChangesObserveButDoNotCancel() async throws {
         let ready = expectation(description: "producer started")
         let trace = ChatTrace()

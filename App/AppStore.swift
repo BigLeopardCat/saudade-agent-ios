@@ -195,7 +195,7 @@ final class AppStore: ObservableObject {
             confirmationState.clear()
             messages.append(Message(user: false, text: "已撤销这张确认卡，未执行改动。"))
             await refresh()
-        } catch { self.error = error.localizedDescription }
+        } catch { confirmationState.interrupt(); self.error = error.localizedDescription }
     }
 
     func openTask(_ task: JSONValue) async {

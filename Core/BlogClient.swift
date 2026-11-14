@@ -22,7 +22,6 @@ public struct BlogClient: Sendable {
         config.urlCredentialStorage = nil
         return URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
     }
-    private static let session = makeSession()
 
     public init(connection: BlogConnection) {
         self.connection = connection
@@ -53,9 +52,19 @@ public struct BlogClient: Sendable {
     }
 
     public func json(_ path: String, body: JSONValue? = nil) async throws -> JSONValue {
-        let (data, response) = try await Self.session.data(for: request(path, body: body))
+        let session = streamSessionFactory()
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: request(path, body: body))
+        guard let http = response as? HTTPURLResponse else { throw AgentError.invalidResponse }
+        let limit = (200..<300).contains(http.statusCode) ? 2_097_152 : 65_536
+        guard response.expectedContentLength <= limit else { throw AgentError.frameTooLarge }
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < limit else { throw AgentError.frameTooLarge }
+            data.append(byte)
+        }
         try check(response, body: data)
-        guard data.count <= 2_097_152 else { throw AgentError.frameTooLarge }
         let json = try JSONDecoder().decode(JSONValue.self, from: data)
         if let code = json["code"].int, code != 200 {
             throw AgentError.message(json["message"].string ?? "博客未完成请求。")
