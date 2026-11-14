@@ -89,7 +89,7 @@ struct ConversationsView: View {
                 }
                 Spacer()
                 if store.currentConversation == conversation.id { Image(systemName: "checkmark").foregroundStyle(.purple) }
-            }.padding(.vertical, 5)
+            }.padding(.vertical, 5).contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(store.busy)
         .accessibilityIdentifier("conversation.row.\(conversation.id)")

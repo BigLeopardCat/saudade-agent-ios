@@ -11,8 +11,10 @@ final class ConversationUITests: XCTestCase {
         let composer = app.descendants(matching: .any).matching(identifier: "chat.composer").firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         composer.tap(); composer.typeText("hello")
+        waitForDraft("hello", composer: composer)
         app.buttons["发送消息"].tap()
         waitForReply(app)
+        XCTAssertTrue(app.staticTexts["hello"].exists)
 
         let name = app.descendants(matching: .any).matching(identifier: "chat.nickname.user").firstMatch
         let bubble = app.descendants(matching: .any).matching(identifier: "chat.bubble.user").firstMatch
@@ -24,29 +26,43 @@ final class ConversationUITests: XCTestCase {
         capture(app, name: "01-chat-nickname-time")
 
         composer.tap(); composer.typeText("draft-one")
+        waitForDraft("draft-one", composer: composer)
         app.buttons["chat.conversations"].tap()
         XCTAssertTrue(app.buttons["conversation.row.-1"].waitForExistence(timeout: 5))
         app.buttons["conversations.new"].tap()
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         XCTAssertNotEqual(composer.value as? String, "draft-one")
         composer.tap(); composer.typeText("second")
+        waitForDraft("second", composer: composer)
         app.buttons["发送消息"].tap()
         waitForReply(app)
         composer.tap(); composer.typeText("draft-two")
+        waitForDraft("draft-two", composer: composer)
         app.buttons["chat.conversations"].tap()
         XCTAssertTrue(app.buttons["conversation.row.-2"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["conversation.row.-1"].exists)
         capture(app, name: "02-conversation-list")
         app.buttons["conversation.row.-1"].tap()
+        waitForListToClose(app)
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
-        XCTAssertEqual(composer.value as? String, "draft-one")
-        XCTAssertTrue(app.staticTexts["hello"].exists)
         capture(app, name: "03-restored-conversation")
+        waitForDraft("draft-one", composer: composer)
+        XCTAssertTrue(app.staticTexts["hello"].exists)
         app.buttons["chat.conversations"].tap()
         app.buttons["conversation.row.-2"].tap()
+        waitForListToClose(app)
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
-        XCTAssertEqual(composer.value as? String, "draft-two")
+        waitForDraft("draft-two", composer: composer)
         XCTAssertTrue(app.staticTexts["second"].exists)
+    }
+    @MainActor private func waitForDraft(_ value: String, composer: XCUIElement) {
+        expectation(for: NSPredicate(format: "value == %@", value), evaluatedWith: composer)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(composer.value as? String, value)
+    }
+    @MainActor private func waitForListToClose(_ app: XCUIApplication) {
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["conversations.new"])
+        waitForExpectations(timeout: 5)
     }
     @MainActor private func waitForReply(_ app: XCUIApplication) {
         let finished = NSPredicate { _, _ in
