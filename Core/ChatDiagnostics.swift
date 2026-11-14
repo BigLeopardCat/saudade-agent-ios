@@ -67,7 +67,12 @@ public final class ChatTrace: @unchecked Sendable {
     }
 
     public func startedRequest(conversationID: Int?, taskID: String?) {
-        change({ $0.phase = "request_started"; $0.conversationID = conversationID; $0.taskID = taskID }, emit: true)
+        let safeTask = taskID.flatMap { value -> String? in
+            guard !value.isEmpty, value.utf8.count <= 100,
+                  value.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else { return nil }
+            return value
+        }
+        change({ $0.phase = "request_started"; $0.conversationID = conversationID; $0.taskID = safeTask }, emit: true)
     }
 
     public func response(status: Int, serverRequestID: String?) {

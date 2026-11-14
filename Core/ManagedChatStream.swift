@@ -7,11 +7,11 @@ public final class ManagedChatStream: @unchecked Sendable {
     private let control: Control
 
     public init(trace: ChatTrace,
-                operation: @escaping @Sendable (@escaping @Sendable (AgentEvent) -> Void) async throws -> Void) {
+                operation: @escaping @Sendable (@escaping @Sendable (AgentEvent) throws -> Void) async throws -> Void) {
         self.trace = trace
         let control = Control(trace: trace)
         self.control = control
-        let pair = AsyncThrowingStream<AgentEvent, Error>.makeStream()
+        let pair = AsyncThrowingStream<AgentEvent, Error>.makeStream(bufferingPolicy: .bufferingOldest(256))
         events = pair.stream
         pair.continuation.onTermination = { termination in
             if case .cancelled = termination { control.cancel(.consumerCancelled) }
@@ -20,8 +20,12 @@ public final class ManagedChatStream: @unchecked Sendable {
             do {
                 try Task.checkCancellation()
                 try await operation { event in
-                    trace.event(event.name)
-                    pair.continuation.yield(event)
+                    switch pair.continuation.yield(event) {
+                    case .enqueued: trace.event(event.name)
+                    case .dropped: throw AgentError.frameTooLarge
+                    case .terminated: throw CancellationError()
+                    @unknown default: throw AgentError.protocolViolation
+                    }
                 }
                 try Task.checkCancellation()
                 guard trace.snapshot.receivedDone else { throw AgentError.incompleteStream }

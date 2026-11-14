@@ -34,7 +34,7 @@ private struct StickerImageProvider: ImageProvider {
 
 private struct StickerInlineProvider: InlineImageProvider {
     func image(with url: URL, label: String) async throws -> Image {
-        guard let image = LocalStickerImages.image(url) else { throw AgentError.invalidResponse }
+        guard let image = LocalStickerImages.image(url) else { return Image(systemName: "photo") }
         return Image(uiImage: image)
     }
 }

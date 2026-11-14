@@ -315,7 +315,8 @@ final class AppStore: ObservableObject {
         guard pendingText.utf8.count + text.utf8.count <= 131_072 else { throw AgentError.frameTooLarge }
         pendingText += text
         let now = ProcessInfo.processInfo.systemUptime
-        if currentScene == "active", chatVisible, now - lastTextPublish >= 0.1 { flushText() }
+        let interval: TimeInterval = pendingText.utf8.count > 32_768 ? 0.5 : 0.1
+        if currentScene == "active", chatVisible, now - lastTextPublish >= interval { flushText() }
     }
 
     private func flushText() {

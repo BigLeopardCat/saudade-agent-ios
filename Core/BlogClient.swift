@@ -94,7 +94,7 @@ public struct BlogClient: Sendable {
                 do { parsed = try parser.consume(byte: byte) }
                 catch { trace.invalidFrame(parser.lastEventName); throw error }
                 if let event = parsed {
-                    emit(event)
+                    try emit(event)
                     if event.name == "error" { throw AgentError.message(event.data.string ?? "Agent 未完成本轮。") }
                     if event.name == "done" {
                         try parser.finish()

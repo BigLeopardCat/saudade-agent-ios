@@ -4,14 +4,18 @@
 
 最低 iOS 17；iPhone 15 Pro 支持灵动岛。默认本地演示，无需登录或模型密钥。演示指标、对话和事务均标记为模拟内容。
 
-## 已实现的首版范围
+## MVP / Alpha 范围
 
 - SwiftUI：陪伴概览、聊天、事务、博客登录。
 - ActivityKit：锁屏和灵动岛的紧凑、最小、展开视图，刷新按钮与聊天深链。
-- 直接复用泠月喵正式头像；不在 Widget 中运行 WebView 或 Live2D。
+- 独立的泠月喵头部 AppIcon 和透明灵动岛头像；不在 Widget 中运行 WebView 或 Live2D。
 - 现有博客登录与 Keychain 凭据保存；客户端仅访问 Rust 宿主，不访问内部 Python Agent。
 - SSE v2 流式正文、进度、重置、文本确认卡；原生确认和服务端撤销。
-- 管理员诊断：CPU、内存、服务可用性；公开文章列表；暂停的 Agent 任务查看和取消。
+- 原生 GFM Markdown、24 张离线贴纸（`:比心:` / `![比心](:比心:)` / `:全部表情:`），代码里的别名保持字面内容。
+- 博客风格的日夜登录页；已登录显示本人头像、昵称，切换账号时才显示表单。
+- 管理员诊断：CPU、内存、服务可用性；公开文章；评论、留言审核和额度申请等人工待办。
+- 人工待办与暂停的 Agent 执行分别展示；读取待办不会自动批准或驳回。
+- 应用、灵动岛展开区和锁屏卡片均可结束陪伴；应用入口同时停止当前接收。
 - 服务错误与未知数据独立展示，不将读取失败当成零待办或服务健康。
 
 ## 没有 Mac 怎么编译
@@ -30,6 +34,7 @@
 ```sh
 brew install xcodegen
 swift test
+bash scripts/prepare_assets.sh
 xcodegen generate
 open Lingyue.xcodeproj
 ```
@@ -38,7 +43,7 @@ open Lingyue.xcodeproj
 
 ## 接入真实博客
 
-应用“连接”页填写博客的 HTTPS 根地址与现有账号密码。服务器诊断需要管理员权限；普通账号依然可以聊天和读取本人任务。密码只用于本次登录，登录 token 保存在本机 Keychain。
+应用“我的博客”页点“登录我的博客”，填写自己部署的兼容 Saudade Blog 的 HTTPS 根地址与账号密码。域名和账号不绑定本项目作者。诊断与审核需要管理员权限；普通账号可以聊天和读取本人任务。密码只用于本次登录，登录 token 保存在本机 Keychain。
 
 宿主必须支持 SSE v2，客户端发送 `X-Agent-Stream-Version: 2`。核对过的来源版本与接口见 [项目上下文](docs/PROJECT_CONTEXT.md) 和 [接口映射](docs/ARCHITECTURE.md)。源码版本不代表当前生产部署版本。
 
@@ -48,10 +53,12 @@ open Lingyue.xcodeproj
 
 聊天历史保存在博客，原生界面只维护当前运行内的对话；可从事务页恢复暂停任务的历史和当前确认卡。断流不自动重连，不自动重发确认请求；停止接收不代表远端业务停止。
 
-首版仅在原生审阅简单文本卡。图片、封面和批量卡保留在博客中审阅；浏览器导航、特效和编辑器命令不会在原生端执行。更完整的会话列表、暂停任务接续、后台推送、通知及正式 App Icon 尚待完善。
+原生端审阅简单文本卡。图片、封面和批量卡保留在博客中审阅；浏览器导航、特效和编辑器命令不会在原生端执行。完整会话管理、后台推送和主动提醒尚未实现。当前定位为 MVP / Alpha，建议发布标签 `v0.2.0-alpha.1`，不等同于经过真机长期验证的稳定版。
+
+长回复合并刷新（通常 100ms，超过 32KiB 后 500ms），后台不逐字刷新 Markdown。单轮正文 128KiB，事件缓冲 256 帧，历史 80 条 / 通常不超过 512KiB，日志 200 条，图片缓存有数量及字节上限。头像只匿名读取同源 HTTPS，无 Cookie、Authorization 或重定向；Markdown 不联网加载外部图片，不执行 HTML 或脚本。详见 [诊断与版本核对](docs/SSE_INVESTIGATION.md)。
 
 ## 许可与验证
 
-代码按 [MIT](LICENSE) 发布。角色美术来自 [BigLeopardCat/saudade-blog-agent](https://github.com/BigLeopardCat/saudade-blog-agent)，按 CC BY-NC-SA 4.0 使用；原始头像未修改，许可与署名保存在 `Resources/Licenses`，应用“连接”页也可查看来源。
+代码按 [MIT](LICENSE) 发布。角色美术来自 [BigLeopardCat/saudade-blog-agent](https://github.com/BigLeopardCat/saudade-blog-agent)，按 CC BY-NC-SA 4.0 使用；许可与署名保存在 `Resources/Licenses`。新增图像的生成方式、提示词摘要与贴纸来源见 [Artwork](Artwork/README.md)。
 
-Swift 测试覆盖分帧、UTF-8、协议终态、未知事件、大小边界、确认卡和过期计算。完整编译结果以对应提交的 GitHub Actions 为准；iPhone 侧载签名与真机灵动岛交互需要单独验证。
+Swift 测试覆盖协议、取消传播、错误保留、确认批准契约、人工待办、用户身份与贴纸边界。CI 对实际 IPA 核对应用/扩展版本、源提交、AppIcon 与 24 张贴纸，生成 `build-manifest.json`。完整编译结果以对应提交的 GitHub Actions 为准；iPhone 侧载签名、真实 SSE、真机灵动岛交互和电量需要单独验证。

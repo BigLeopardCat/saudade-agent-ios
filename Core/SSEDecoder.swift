@@ -102,7 +102,9 @@ public struct SSEDecoder {
     }
 
     private static func validProgress(_ value: JSONValue) -> Bool {
-        guard let text = value["text"].string, !text.isEmpty, text.unicodeScalars.count <= 300,
+        guard Set(value.object?.keys.map { $0 } ?? []) == Set(["text", "work"]),
+              Set(value["work"].object?.keys.map { $0 } ?? []) == Set(["id", "stage", "status"]),
+              let text = value["text"].string, !text.isEmpty, text.unicodeScalars.count <= 300,
               let id = value["work"]["id"].string, !id.isEmpty, id.unicodeScalars.count <= 128,
               let stage = value["work"]["stage"].string, !stage.isEmpty, stage.unicodeScalars.count <= 64,
               let status = value["work"]["status"].string else { return false }

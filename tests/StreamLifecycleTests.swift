@@ -148,7 +148,7 @@ final class StreamLifecycleTests: XCTestCase {
         let handle = ManagedChatStream(trace: trace) { emit in
             ready.fulfill()
             try await Task.sleep(for: .milliseconds(150))
-            emit(.init(name: "done", data: .object([:])))
+            try emit(.init(name: "done", data: .object([:])))
         }
         await fulfillment(of: [ready], timeout: 2)
         trace.lifecycle(scene: "background", chatVisible: false)
@@ -173,6 +173,22 @@ final class StreamLifecycleTests: XCTestCase {
         await fulfillment(of: [cancelled], timeout: 2)
         await eventually { trace.snapshot.phase == "failed" }
         XCTAssertEqual(trace.snapshot.cancellationSource, .ownerReleased)
+    }
+
+    func testSlowConsumerFailsExplicitlyAtBufferLimitWithoutFakeDone() async throws {
+        let trace = ChatTrace()
+        let finished = expectation(description: "producer bounded")
+        let handle = ManagedChatStream(trace: trace) { emit in
+            defer { finished.fulfill() }
+            for _ in 0..<1000 { try emit(.init(name: "text", data: .string("chunk"))) }
+            try emit(.init(name: "done", data: .object([:])))
+        }
+        await fulfillment(of: [finished], timeout: 2)
+        var count = 0
+        do { for try await _ in handle.events { count += 1 }; XCTFail("Overflow must fail") }
+        catch { XCTAssertEqual(error as? AgentError, .frameTooLarge) }
+        XCTAssertEqual(count, 256)
+        XCTAssertFalse(trace.snapshot.receivedDone)
     }
 
     private func eventually(_ condition: () -> Bool) async {

@@ -13,8 +13,19 @@ private actor AvatarImages {
     private let cache: NSCache<NSURL, UIImage> = {
         let cache = NSCache<NSURL, UIImage>(); cache.countLimit = 16; cache.totalCostLimit = 2_097_152; return cache
     }()
+    private var loading: [URL: Task<UIImage, Error>] = [:]
     func image(_ url: URL) async throws -> UIImage {
         if let image = cache.object(forKey: url as NSURL) { return image }
+        if let task = loading[url] { return try await task.value }
+        guard loading.count < 4 else { throw AgentError.frameTooLarge }
+        let task = Task { try await Self.fetch(url) }
+        loading[url] = task
+        defer { loading[url] = nil }
+        let image = try await task.value
+        cache.setObject(image, forKey: url as NSURL, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
+        return image
+    }
+    private static func fetch(_ url: URL) async throws -> UIImage {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 12; config.timeoutIntervalForResource = 20
         config.httpCookieStorage = nil; config.urlCache = nil; config.urlCredentialStorage = nil
@@ -40,7 +51,6 @@ private actor AvatarImages {
                 kCGImageSourceShouldCacheImmediately: true
               ] as CFDictionary) else { throw AgentError.invalidResponse }
         let image = UIImage(cgImage: cg)
-        cache.setObject(image, forKey: url as NSURL, cost: cg.bytesPerRow * cg.height)
         return image
     }
 }

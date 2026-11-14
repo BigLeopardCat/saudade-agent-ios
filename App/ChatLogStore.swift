@@ -15,6 +15,7 @@ enum BuildInfo {
 final class ChatLogStore: @unchecked Sendable {
     static let shared = ChatLogStore()
     private let lock = NSLock()
+    private let queue = DispatchQueue(label: "site.saudade.lingyue.diagnostics", qos: .utility)
     private let logger = Logger(subsystem: "site.saudade.lingyue", category: "ChatStream")
     let fileURL: URL
 
@@ -27,6 +28,10 @@ final class ChatLogStore: @unchecked Sendable {
     }
 
     func append(_ record: ChatDiagnosticRecord) {
+        queue.async { self.write(record) }
+    }
+
+    private func write(_ record: ChatDiagnosticRecord) {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(record), let line = String(data: data, encoding: .utf8) else { return }
