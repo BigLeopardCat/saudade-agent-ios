@@ -13,6 +13,7 @@ struct ChatMessageRow: View, Equatable {
             VStack(alignment: message.user ? .trailing : .leading, spacing: 6) {
                 Text(message.user ? userName : "泠月喵")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .accessibilityIdentifier(message.user ? "chat.nickname.user" : "chat.nickname.agent")
                 VStack(alignment: .leading, spacing: 8) {
                     if message.user { Text(verbatim: message.text).textSelection(.enabled) }
                     else { ChatMarkdown(text: message.text).equatable() }
@@ -33,6 +34,7 @@ struct ChatMessageRow: View, Equatable {
                 }
                 .padding(14)
                 .background(message.user ? Color.purple.opacity(0.13) : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
+                .accessibilityIdentifier(message.user ? "chat.bubble.user" : "chat.bubble.agent")
             }
             if message.user { IdentityAvatar(profile: profile, origin: origin, size: 34) }
             else { Spacer(minLength: 12) }
@@ -46,5 +48,6 @@ struct ChatTimestamp: View, Equatable {
     var body: some View {
         Text(ChatTime.label(time, now: day)).font(.caption2).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity).padding(.vertical, 5)
+            .accessibilityIdentifier("chat.time")
     }
 }

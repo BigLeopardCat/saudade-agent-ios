@@ -41,6 +41,7 @@ struct ConversationsView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
                     Button("新对话", systemImage: "square.and.pencil") { store.newChat(); dismiss() }.disabled(store.busy)
+                        .accessibilityIdentifier("conversations.new")
                 }
             }
             .task { await store.loadConversations() }
@@ -91,6 +92,7 @@ struct ConversationsView: View {
             }.padding(.vertical, 5)
         }
         .buttonStyle(.plain).disabled(store.busy)
+        .accessibilityIdentifier("conversation.row.\(conversation.id)")
         .contextMenu {
             Button("重命名", systemImage: "pencil") { title = conversation.title ?? ""; renaming = conversation }.disabled(store.busy)
             Button(conversation.pinned ? "取消置顶" : "置顶", systemImage: "pin") {

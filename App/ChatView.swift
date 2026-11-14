@@ -58,6 +58,7 @@ struct ChatView: View {
                 } else {
                 HStack(alignment: .bottom, spacing: 12) {
                     TextField("和泠月喵说点什么…", text: $store.composerDraft, axis: .vertical)
+                        .accessibilityIdentifier("chat.composer")
                         .lineLimit(1...5).focused($focused).padding(12)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
                         .disabled(store.busy)
@@ -85,6 +86,7 @@ struct ChatView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("会话列表", systemImage: "list.bullet.bubble") { focused = false; store.conversationsPresented = true }
+                        .accessibilityIdentifier("chat.conversations")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("新对话", systemImage: "square.and.pencil") { store.newChat() }.disabled(store.busy)
