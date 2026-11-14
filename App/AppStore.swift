@@ -15,9 +15,11 @@ final class AppStore: ObservableObject {
     @Published var configuration = ConnectionStore.load()
     @Published var overview: Overview?
     @Published var messages: [Message] = []
-    @Published var confirmation: Confirmation?
+    @Published private(set) var confirmationState = ConfirmationReviewState()
+    var confirmation: Confirmation? { confirmationState.card }
     @Published var selectedTab = 0
     @Published var busy = false
+    @Published private(set) var receiving = false
     @Published var refreshing = false
     @Published var progress = ""
     @Published var error: String?
@@ -25,6 +27,26 @@ final class AppStore: ObservableObject {
     @Published var currentConversation: Int?
     private var generation = UUID()
     private var streamTask: Task<Void, Never>?
+    private var activeStream: ManagedChatStream?
+    private var activeTrace: ChatTrace?
+    private var currentScene = "unknown"
+    private var chatVisible = false
+
+    func observeScene(_ scene: ScenePhase) {
+        switch scene {
+        case .active: currentScene = "active"
+        case .inactive: currentScene = "inactive"
+        case .background: currentScene = "background"
+        @unknown default: currentScene = "unknown"
+        }
+        // Observation only. Suspension or network loss is diagnosed separately, not labelled user-stop.
+        activeTrace?.lifecycle(scene: currentScene, chatVisible: chatVisible)
+    }
+
+    func observeChatVisibility(_ visible: Bool) {
+        chatVisible = visible
+        activeTrace?.lifecycle(scene: currentScene, chatVisible: visible)
+    }
 
     func refresh() async {
         guard !refreshing else { return }
@@ -96,14 +118,14 @@ final class AppStore: ObservableObject {
     private func changeConfiguration(_ value: ConnectionStore.Configuration) async {
         generation = UUID()
         await endIsland()
-        confirmation = nil; currentConversation = nil; messages = []; overview = nil; error = nil
+        confirmationState.clear(); currentConversation = nil; messages = []; overview = nil; error = nil
         configuration = value
         do { try ConnectionStore.save(value) } catch { self.error = error.localizedDescription }
     }
 
     func newChat() {
         guard !busy else { return }
-        confirmation = nil; currentConversation = nil; messages = []; progress = ""
+        confirmationState.clear(); currentConversation = nil; messages = []; progress = ""
     }
 
     func send(_ text: String) {
@@ -111,13 +133,13 @@ final class AppStore: ObservableObject {
         guard !busy, !text.isEmpty else { return }
         guard text.unicodeScalars.count <= 4000 else { error = "每条消息最多 4000 字。"; return }
         messages.append(Message(user: true, text: text))
-        confirmation = nil
+        confirmationState.clear()
         startStream(message: text)
     }
 
     func approve(_ card: Confirmation) {
-        guard !busy, confirmation?.id == card.id, card.supportsNativeReview, !card.expired else { return }
-        confirmation = nil
+        guard !busy, confirmationState.canApprove(card) else { return }
+        confirmationState.beginApproval()
         startStream(message: "", approving: card)
     }
 
@@ -131,7 +153,7 @@ final class AppStore: ObservableObject {
                 ]))
                 guard response["cancelled"].bool == true else { throw AgentError.message("未能确认撤销结果，请重新核对。") }
             }
-            confirmation = nil
+            confirmationState.clear()
             messages.append(Message(user: false, text: "已撤销这张确认卡，未执行改动。"))
             await refresh()
         } catch { self.error = error.localizedDescription }
@@ -152,7 +174,12 @@ final class AppStore: ObservableObject {
                 guard let text = $0["content"].string, let role = $0["role"].string else { return nil }
                 return Message(user: role == "user", text: text)
             }
-            confirmation = card["confirmation"] == .null ? nil : try Confirmation(card["confirmation"])
+            confirmationState.clear()
+            if card["confirmation"] != .null {
+                let restored = try Confirmation(card["confirmation"])
+                guard restored.taskID == id && card["task_id"].string == id else { throw AgentError.protocolViolation }
+                confirmationState.receive(restored)
+            }
             selectedTab = 1
         } catch { self.error = error.localizedDescription }
     }
@@ -165,22 +192,31 @@ final class AppStore: ObservableObject {
                 "conversation_id": .number(Double(cid)), "task_id": .string(id)
             ]))
             guard response["cancelled"].bool == true else { throw AgentError.message("未能确认任务取消结果。") }
-            if currentConversation == cid { confirmation = nil }
+            if currentConversation == cid { confirmationState.clear() }
             await refresh()
         } catch { self.error = error.localizedDescription }
     }
 
     private func startStream(message: String, approving: Confirmation? = nil) {
-        busy = true; error = nil; progress = "泠月喵正在想…"
+        busy = true; receiving = true; error = nil; progress = "泠月喵正在想…"
+        let trace = ChatTrace(buildCommit: BuildInfo.commit, sink: { ChatLogStore.shared.append($0) })
+        activeTrace = trace
+        trace.startedRequest(conversationID: currentConversation, taskID: approving?.taskID)
+        trace.lifecycle(scene: currentScene, chatVisible: chatVisible)
         let index = messages.count
         messages.append(Message(user: false, text: ""))
         streamTask = Task {
             var completed = false
-            defer { busy = false; progress = ""; streamTask = nil }
+            defer {
+                activeStream?.cancel(.consumerEnded)
+                activeStream = nil; activeTrace = nil
+                busy = false; receiving = false; progress = ""; streamTask = nil
+            }
             do {
                 if configuration.demo {
                     try await demoReply(message: message, approving: approving, index: index)
                     completed = true
+                    trace.event("done"); trace.finish()
                 } else {
                     let client = try ConnectionStore.client(configuration)
                     if currentConversation == nil {
@@ -189,43 +225,74 @@ final class AppStore: ObservableObject {
                         currentConversation = id
                     }
                     let turn = UUID().uuidString
-                    var body: [String: JSONValue] = [
-                        "message": .string(message), "conversation_id": .number(Double(currentConversation!)),
-                        "turn_id": .string(turn), "browser_feedback": .bool(false), "task_inputs": .bool(false)
-                    ]
-                    if let approving {
-                        body["confirm_token"] = .string(approving.token)
-                        body["confirm_pick"] = .string("")
-                    } else { body["task_id"] = .string(turn) }
-                    for try await event in client.stream(.object(body)) {
-                        try Task.checkCancellation()
-                        switch event.name {
-                        case "text": messages[index].text += event.data.string ?? ""
-                        case "text_reset": messages[index].text = ""
-                        case "progress": progress = event.data.string ?? event.data["text"].string ?? "处理中…"
-                        case "confirmation": confirmation = try Confirmation(event.data)
-                        case "command":
-                            // Native clients cannot report browser/editor state or execute page commands.
-                            progress = "这一步需要在博客页面继续。"
-                        case "error": throw AgentError.message(event.data.string ?? "Agent 未完成本轮。")
-                        case "done": completed = true
-                        default: break
+                    let body = approving.map { ChatPayload.approval($0, conversationID: currentConversation!) }
+                        ?? ChatPayload.message(message, conversationID: currentConversation!, turnID: turn)
+                    trace.startedRequest(conversationID: currentConversation, taskID: approving?.taskID ?? turn)
+                    let stream = client.stream(body, trace: trace)
+                    activeStream = stream
+                    try await withTaskCancellationHandler {
+                        for try await event in stream.events {
+                            try Task.checkCancellation()
+                            switch event.name {
+                            case "text": messages[index].text += event.data.string ?? ""
+                            case "text_reset": messages[index].text = ""
+                            case "progress": progress = event.data.string ?? event.data["text"].string ?? "处理中…"
+                            case "confirmation": confirmationState.receive(try Confirmation(event.data))
+                            case "command": progress = "这一步需要在博客页面继续。"
+                            case "error": throw AgentError.message(event.data.string ?? "Agent 未完成本轮。")
+                            case "done": completed = true
+                            default: break
+                            }
                         }
+                    } onCancel: {
+                        stream.cancel(.parentTask)
                     }
                 }
                 guard completed else { throw AgentError.incompleteStream }
+                if let approving { confirmationState.finishApproval(approving) }
                 if messages[index].text.isEmpty { messages[index].text = confirmation == nil ? "本轮已结束。" : "有一项操作需要你审阅。" }
+                receiving = false
                 await refresh()
             } catch {
                 messages[index].incomplete = true
                 if messages[index].text.isEmpty { messages[index].text = "本轮未完整结束。" }
-                confirmation = nil
-                self.error = error is CancellationError ? "已停止接收；远端可能仍在处理，请核对事务状态。" : error.localizedDescription
+                confirmationState.interrupt()
+                activeStream?.cancel(.consumerEnded)
+                trace.finish(error: error)
+                let ns = error as NSError
+                let cancelled = error is CancellationError || (ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled)
+                let detail = cancelled ? "接收已取消；远端可能仍在处理，请核对事务状态。" : error.localizedDescription
+                self.error = "\(detail)\n请求编号：\(trace.requestID)"
             }
         }
     }
 
-    func stopReceiving() { streamTask?.cancel() }
+    func stopReceiving() {
+        guard receiving else { return }
+        activeTrace?.cancel(.userStop)
+        activeStream?.cancel(.userStop)
+        streamTask?.cancel()
+    }
+
+    func reloadConfirmation() async {
+        guard !busy, let previous = confirmation, let cid = currentConversation else { return }
+        busy = true; defer { busy = false }
+        do {
+            if configuration.demo { confirmationState.receive(previous); return }
+            let response = try await ConnectionStore.client(configuration).json("/api/chat/task/confirmation", body: .object([
+                "conversation_id": .number(Double(cid)), "task_id": .string(previous.taskID)
+            ]))
+            guard response["task_id"].string == previous.taskID else { throw AgentError.protocolViolation }
+            if response["confirmation"] == .null {
+                confirmationState.clear()
+                error = "服务端当前没有这项任务的有效确认卡。请核对执行结果，不要重发旧批准请求。"
+            } else {
+                let card = try Confirmation(response["confirmation"])
+                guard card.taskID == previous.taskID else { throw AgentError.protocolViolation }
+                confirmationState.receive(card)
+            }
+        } catch { self.error = error.localizedDescription }
+    }
 
     private func demoReply(message: String, approving: Confirmation?, index: Int) async throws {
         currentConversation = -1
@@ -234,7 +301,7 @@ final class AppStore: ObservableObject {
             reply = "演示确认已收到，喵。没有修改真实博客数据。"
         } else if message.contains("审核") || message.contains("事务") {
             let now = Date().timeIntervalSince1970
-            confirmation = try Confirmation(.object([
+            confirmationState.receive(try Confirmation(.object([
                 "id": .string(UUID().uuidString), "task_id": .string("demo-task"),
                 "q": .string("通过这条演示留言吗？"), "token": .string("demo-only"),
                 "exp": .number(now + 300), "server_time": .number(now),
@@ -242,7 +309,7 @@ final class AppStore: ObservableObject {
                                 .object(["label": .string("撤销"), "value": .string("no")])]),
                 "details": .object(["fields": .array([.object(["label": .string("留言内容"), "value": .string("泠月喵，晚上好！")])]), "sections": .array([])]),
                 "notices": .array([.object(["kind": .string("info"), "text": .string("这是一张演示卡，不会提交真实操作。")])])
-            ]))
+            ])))
             reply = "我准备了一张演示确认卡。先看看内容，再决定要不要执行，喵。"
         } else if message.contains("服务器") || message.contains("状态") {
             reply = "演示服务器 CPU 12%，内存 48%，三个服务正常。连接你的博客后，这里会使用真实诊断数据。"

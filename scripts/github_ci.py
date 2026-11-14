@@ -55,8 +55,11 @@ def request(path, token, method="GET", payload=None, raw=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["identity", "create", "runs", "jobs", "logs"])
+    parser.add_argument("action", choices=["identity", "create", "runs", "jobs", "logs", "pr"])
     parser.add_argument("--run", type=int)
+    parser.add_argument("--head")
+    parser.add_argument("--title")
+    parser.add_argument("--body-file", type=Path)
     args = parser.parse_args()
     token = credential()
     user = request("/user", token)
@@ -87,6 +90,16 @@ def main():
         print(json.dumps([{"name": j["name"], "status": j["status"], "conclusion": j["conclusion"], "steps": [
             {key: step.get(key) for key in ["name", "status", "conclusion"]} for step in j["steps"]
         ]} for j in jobs]))
+    elif args.action == "pr":
+        if not args.head or not args.title or not args.body_file:
+            raise ValueError("pr requires --head, --title and --body-file")
+        existing = request(base + "/pulls?state=open&head=" + OWNER + ":" + args.head, token)
+        payload = {"title": args.title, "body": args.body_file.read_text(encoding="utf-8"), "base": "main"}
+        if existing:
+            pr = request(base + "/pulls/" + str(existing[0]["number"]), token, "PATCH", payload)
+        else:
+            pr = request(base + "/pulls", token, "POST", {**payload, "head": args.head})
+        print(json.dumps({"number": pr["number"], "url": pr["html_url"], "head": pr["head"]["sha"]}))
     else:
         data = request(base + f"/actions/runs/{args.run}/logs", token, raw=True)
         output = ROOT / "build" / "ci-logs" / str(args.run)

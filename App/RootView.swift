@@ -184,6 +184,10 @@ private struct SettingsView: View {
                     Text("登录凭据保存在本机钥匙串。服务器诊断需要管理员权限。").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("关于泠月喵") {
+                    LabeledContent("构建版本", value: BuildInfo.label).font(.footnote)
+                    ShareLink("导出聊天诊断日志", item: ChatLogStore.shared.fileURL)
+                    Text("日志仅含请求编号、事件名、生命周期、错误代码与耗时，不含聊天正文或凭据。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     LingyueAvatar(size: 90)
                     Text("形象：BigLeopardCat / saudade-blog-agent\n美术许可：CC BY-NC-SA 4.0").font(.footnote)
                     Link("原项目与美术署名", destination: URL(string: "https://github.com/BigLeopardCat/saudade-blog-agent")!)

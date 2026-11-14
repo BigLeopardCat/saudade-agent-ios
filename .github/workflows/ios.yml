@@ -30,11 +30,11 @@ jobs:
       - name: Build simulator app and Live Activity extension
         run: |
           set -o pipefail
-          xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/simulator CODE_SIGNING_ALLOWED=NO build | tee simulator-build.log
+          xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/simulator CODE_SIGNING_ALLOWED=NO BUILD_SOURCE_COMMIT="$(git rev-parse HEAD)" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build | tee simulator-build.log
       - name: Build unsigned device app
         run: |
           set -o pipefail
-          xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO build | tee device-build.log
+          xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO BUILD_SOURCE_COMMIT="$(git rev-parse HEAD)" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build | tee device-build.log
       - name: Package unsigned IPA
         run: |
           mkdir -p build/package/Payload
