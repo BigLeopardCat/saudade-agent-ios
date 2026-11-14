@@ -42,6 +42,7 @@ final class AppStore: ObservableObject {
     private var nextDemoID = -1
     var conversationTitle: String { conversations.first { $0.id == currentConversation }?.displayTitle ?? (currentConversation == nil ? "新对话" : "泠月喵") }
     var hasOlderHistory: Bool { historyWindow?.mayHaveOlder == true }
+    var composerIdentity: String { generation.uuidString + ":" + String(currentConversation ?? 0) }
     private var generation = UUID()
     private var streamTask: Task<Void, Never>?
     private var activeStream: ManagedChatStream?
@@ -442,10 +443,10 @@ extension AppStore {
         }
     }
 
-    func setComposerDraft(_ value: String, conversationID: Int?) {
+    func setComposerDraft(_ value: String, editorIdentity: String) {
         // A dismissed/reused UIKit editor may commit its previous buffer late.
         // Such an edit must never land in the newly selected conversation.
-        guard currentConversation == conversationID else { return }
+        guard composerIdentity == editorIdentity else { return }
         composerDraft = value
     }
 
