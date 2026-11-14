@@ -38,6 +38,22 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild -project Lingyue.xcodeproj -scheme Lingyue -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO BUILD_SOURCE_COMMIT="$(git rev-parse HEAD)" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build | tee device-build.log
+      - name: Boot UI simulator
+        timeout-minutes: 4
+        run: |
+          device=$(python3 scripts/boot_ui_simulator.py)
+          echo "UI_SIMULATOR=$device" >> "$GITHUB_ENV"
+      - name: Run demo UI conversation and layout test
+        timeout-minutes: 9
+        run: |
+          set -o pipefail
+          xcodebuild test -project Lingyue.xcodeproj -scheme Lingyue -configuration Debug -sdk iphonesimulator -destination "id=$UI_SIMULATOR" -derivedDataPath build/simulator -resultBundlePath build/ui-tests.xcresult -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES BUILD_SOURCE_COMMIT="$(git rev-parse HEAD)" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" | tee ui-test.log
+      - name: Export UI screenshots
+        if: always()
+        run: |
+          if [ -d build/ui-tests.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/ui-tests.xcresult --output-path build/ui-screenshots
+          fi
       - name: Package unsigned IPA
         run: |
           mkdir -p build/package/Payload
@@ -52,6 +68,16 @@ jobs:
           path: |
             build/Lingyue-unsigned.ipa
             build/build-manifest.json
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-conversation-results
+          path: |
+            build/ui-screenshots/*.png
+            build/ui-screenshots/manifest.json
+            ui-test.log
+          if-no-files-found: ignore
           retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()

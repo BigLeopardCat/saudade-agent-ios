@@ -10,6 +10,7 @@ private final class NoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sen
 }
 
 public struct BlogClient: Sendable {
+    public enum Method: String, Sendable { case get = "GET", post = "POST", patch = "PATCH", delete = "DELETE" }
     public let connection: BlogConnection
     private let streamSessionFactory: @Sendable () -> URLSession
     private static func makeSession() -> URLSession {
@@ -33,16 +34,16 @@ public struct BlogClient: Sendable {
         self.streamSessionFactory = streamSessionFactory
     }
 
-    private func request(_ path: String, body: JSONValue? = nil) throws -> URLRequest {
+    private func request(_ path: String, body: JSONValue? = nil, method: Method? = nil) throws -> URLRequest {
         var request = URLRequest(url: connection.url(path))
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if !connection.token.isEmpty { request.setValue("Bearer \(connection.token)", forHTTPHeaderField: "Authorization") }
         if let body {
-            request.httpMethod = "POST"
             request.httpBody = try JSONEncoder().encode(body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
+        request.httpMethod = (method ?? (body == nil ? .get : .post)).rawValue
         return request
     }
 
@@ -51,12 +52,12 @@ public struct BlogClient: Sendable {
         guard (200..<300).contains(http.statusCode) else { throw HTTPFailure(status: http.statusCode, body: body) }
     }
 
-    public func json(_ path: String, body: JSONValue? = nil) async throws -> JSONValue {
+    private func data(_ path: String, body: JSONValue? = nil, method: Method? = nil, maximumBytes: Int = 2_097_152) async throws -> Data {
         let session = streamSessionFactory()
         defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: request(path, body: body))
+        let (bytes, response) = try await session.bytes(for: request(path, body: body, method: method))
         guard let http = response as? HTTPURLResponse else { throw AgentError.invalidResponse }
-        let limit = (200..<300).contains(http.statusCode) ? 2_097_152 : 65_536
+        let limit = (200..<300).contains(http.statusCode) ? maximumBytes : 65_536
         guard response.expectedContentLength <= limit else { throw AgentError.frameTooLarge }
         var data = Data()
         for try await byte in bytes {
@@ -65,11 +66,26 @@ public struct BlogClient: Sendable {
             data.append(byte)
         }
         try check(response, body: data)
+        return data
+    }
+
+    public func json(_ path: String, body: JSONValue? = nil, method: Method? = nil) async throws -> JSONValue {
+        let data = try await data(path, body: body, method: method)
         let json = try JSONDecoder().decode(JSONValue.self, from: data)
         if let code = json["code"].int, code != 200 {
             throw AgentError.message(json["message"].string ?? "博客未完成请求。")
         }
         return json
+    }
+
+    public func history(conversationID: Int, beforeID: Int? = nil) async throws -> ChatHistoryPage {
+        guard conversationID > 0, conversationID <= Int(Int32.max), beforeID == nil || beforeID! > 0 else { throw AgentError.invalidResponse }
+        let path = "/api/chat/history?conversation_id=\(conversationID)" + (beforeID.map { "&before_id=\($0)" } ?? "")
+        // The host can attach up to 8 MiB of images. Decode typed text metadata only, without retaining image payloads.
+        let bytes = try await data(path, maximumBytes: 12_582_912)
+        let page = try JSONDecoder().decode(ChatHistoryPage.self, from: bytes)
+        try page.validate(conversationID: conversationID, beforeID: beforeID)
+        return page
     }
 
     public func stream(_ body: JSONValue, trace: ChatTrace = ChatTrace()) -> ManagedChatStream {

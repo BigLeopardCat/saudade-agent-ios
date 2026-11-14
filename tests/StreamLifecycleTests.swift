@@ -151,6 +151,28 @@ final class StreamLifecycleTests: XCTestCase {
         XCTAssertEqual(scenario.count, 1)
     }
 
+    func testConversationMutationsUseExplicitMethodsWithoutReplay() async throws {
+        let patch = Scenario(wire: "{\"success\":true}", finishes: true)
+        _ = try await client(patch).json("/api/chat/conversations/7", body: .object(["pinned": .bool(true)]), method: .patch)
+        XCTAssertEqual(patch.method, "PATCH"); XCTAssertEqual(patch.count, 1)
+        let deletion = Scenario(wire: "{\"success\":true}", finishes: true)
+        _ = try await client(deletion).json("/api/chat/conversations/7", method: .delete)
+        XCTAssertEqual(deletion.method, "DELETE"); XCTAssertEqual(deletion.count, 1)
+    }
+
+    func testHistoryCursorIsGETAndResponseMustMatchRequestedConversation() async throws {
+        let wire = "{\"conversation_id\":7,\"count\":1,\"items\":[{\"id\":5,\"role\":\"user\",\"content\":\"hi\",\"time\":0,\"images\":[]}]}"
+        let scenario = Scenario(wire: wire, finishes: true)
+        let page = try await client(scenario).history(conversationID: 7, beforeID: 10)
+        XCTAssertEqual(page.oldestID, 5)
+        XCTAssertEqual(scenario.method, "GET")
+        XCTAssertEqual(scenario.url?.query, "conversation_id=7&before_id=10")
+        let wrong = Scenario(wire: wire, finishes: true)
+        do { _ = try await client(wrong).history(conversationID: 8); XCTFail("Cross-conversation response must fail") }
+        catch { XCTAssertEqual(error as? AgentError, .invalidResponse) }
+        XCTAssertEqual(wrong.count, 1)
+    }
+
     func testSceneAndViewChangesObserveButDoNotCancel() async throws {
         let ready = expectation(description: "producer started")
         let trace = ChatTrace()
@@ -224,6 +246,8 @@ private final class Scenario: @unchecked Sendable {
         self.wire = wire; self.status = status; self.finishes = finishes; self.failure = failure; self.onStop = onStop
     }
     var count: Int { lock.lock(); defer { lock.unlock() }; return starts }
+    var method: String? { lock.lock(); defer { lock.unlock() }; return request?.httpMethod }
+    var url: URL? { lock.lock(); defer { lock.unlock() }; return request?.url }
     func header(_ name: String) -> String? { lock.lock(); defer { lock.unlock() }; return request?.value(forHTTPHeaderField: name) }
     func start(_ loading: MockProtocol) {
         lock.lock(); starts += 1; request = loading.request; lock.unlock()

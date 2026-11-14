@@ -3,7 +3,6 @@ import SwiftUI
 
 struct ChatView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var draft = ""
     @State private var approving: Confirmation?
     @FocusState private var focused: Bool
 
@@ -12,6 +11,7 @@ struct ChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 18) {
+                        historyControls
                         if store.messages.isEmpty {
                             VStack(spacing: 18) {
                                 LingyueAvatar(size: 120)
@@ -25,37 +25,41 @@ struct ChatView: View {
                                 }
                             }.frame(maxWidth: .infinity).padding(.vertical, 38)
                         }
-                        ForEach(store.messages) { message in
-                            HStack(alignment: .top, spacing: 10) {
-                                if message.user { Spacer(minLength: 34) }
-                                else { LingyueAvatar(size: 32) }
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(message.user ? (store.configuration.demo ? "我 · 演示" : store.profile?.displayName ?? "我") : "泠月喵")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                    if message.user { Text(verbatim: message.text).textSelection(.enabled) }
-                                    else { ChatMarkdown(text: message.text).equatable() }
-                                    if message.incomplete { Label("本轮未完整结束", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary) }
-                                }
-                                .padding(15)
-                                .background(message.user ? Color.purple.opacity(0.13) : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
-                                if !message.user { Spacer(minLength: 12) }
-                                else { IdentityAvatar(profile: store.profile, origin: store.configuration.origin) }
-                            }.id(message.id)
+                        ForEach(Array(store.messages.enumerated()), id: \.element.id) { index, message in
+                            if ChatTime.shouldShow(previous: index > 0 ? store.messages[index - 1].time : nil, current: message.time), let time = message.time {
+                                ChatTimestamp(time: time, day: Calendar.current.startOfDay(for: Date())).equatable()
+                            }
+                            ChatMessageRow(message: message,
+                                userName: store.configuration.demo ? "我 · 演示" : store.profile?.displayName ?? "我",
+                                profile: store.profile, origin: store.configuration.origin).equatable().id(message.id)
                         }
-                        if let card = store.confirmation {
+                        if let card = store.confirmation, !store.viewingEarlierHistory {
                             confirmationCard(card)
                         }
-                        if store.busy { HStack { ProgressView(); Text(store.progress).font(.caption).foregroundStyle(.secondary) } }
+                        if store.busy { HStack { ProgressView(); Text(store.receiving ? store.progress : "读取中…").font(.caption).foregroundStyle(.secondary) } }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(18)
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .onChange(of: store.messages.last?.text) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-                .onChange(of: store.confirmation?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: store.messages.last?.text) { _, _ in if !store.viewingEarlierHistory { proxy.scrollTo("bottom", anchor: .bottom) } }
+                .onChange(of: store.messages.last?.id) { _, _ in if !store.viewingEarlierHistory { proxy.scrollTo("bottom", anchor: .bottom) } }
+                .onChange(of: store.confirmation?.id) { _, _ in if !store.viewingEarlierHistory { proxy.scrollTo("bottom", anchor: .bottom) } }
+                .onChange(of: store.viewingEarlierHistory) { _, earlier in if !earlier { proxy.scrollTo("bottom", anchor: .bottom) } }
+                .onChange(of: store.historyScrollAnchor) { _, anchor in if let anchor { proxy.scrollTo(anchor, anchor: .top) } }
             }
             .safeAreaInset(edge: .bottom) {
+                if store.viewingEarlierHistory {
+                    HStack {
+                        Label("正在查看较早消息", systemImage: "clock").font(.footnote).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("回到最新消息") { Task { await store.returnToLatest() } }.disabled(store.busy)
+                    }.padding().background(.regularMaterial)
+                } else {
                 HStack(alignment: .bottom, spacing: 12) {
-                    TextField("和泠月喵说点什么…", text: $draft, axis: .vertical)
+                    TextField("和泠月喵说点什么…", text: draftBinding, axis: .vertical)
+                        .id(store.composerIdentity)
+                        .accessibilityIdentifier("chat.composer")
                         .lineLimit(1...5).focused($focused).padding(12)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
                         .disabled(store.busy)
@@ -64,22 +68,57 @@ struct ChatView: View {
                             .accessibilityLabel("停止接收回复")
                     } else {
                         Button {
-                            let message = draft; draft = ""; focused = false; store.send(message)
+                            focused = false; store.send(store.composerDraft)
                         } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(store.composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .disabled(store.busy)
                         .accessibilityLabel("发送消息")
                     }
                 }.padding(.horizontal, 18).padding(.vertical, 10).background(.regularMaterial)
+                }
             }
-            .navigationTitle(store.configuration.demo ? "泠月喵 · 演示" : "泠月喵")
+            .navigationTitle((store.configuration.demo ? "演示 · " : "") + store.conversationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { store.observeChatVisibility(true) }
             .onDisappear { store.observeChatVisibility(false) }
-            .toolbar { Button("新对话", systemImage: "square.and.pencil") { store.newChat() }.disabled(store.busy) }
+            .task { await store.prepareConversations() }
+            .onChange(of: store.composerDraft) { _, _ in store.clampDraft() }
+            .onChange(of: store.currentConversation) { _, _ in approving = nil; focused = false }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("会话列表", systemImage: "list.bullet.bubble") { focused = false; store.conversationsPresented = true }
+                        .accessibilityIdentifier("chat.conversations")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("新对话", systemImage: "square.and.pencil") { store.newChat() }.disabled(store.busy)
+                }
+            }
+            .sheet(isPresented: $store.conversationsPresented) { ConversationsView().environmentObject(store) }
             .confirmationDialog("提交这项操作？", isPresented: Binding(get: { approving != nil }, set: { if !$0 { approving = nil } })) {
                 Button("确认提交") { if let card = approving { store.approve(card) }; approving = nil }
             } message: { Text(approving?.question ?? "") }
+        }
+    }
+
+    private var draftBinding: Binding<String> {
+        let identity = store.composerIdentity
+        return Binding(get: { store.composerIdentity == identity ? store.composerDraft : "" },
+                       set: { store.setComposerDraft($0, editorIdentity: identity) })
+    }
+
+    @ViewBuilder private var historyControls: some View {
+        if store.currentConversation != nil, !store.configuration.demo {
+            VStack(spacing: 10) {
+                if store.hasOlderHistory {
+                    Button("加载更早消息", systemImage: "clock.arrow.circlepath") { Task { await store.loadEarlierHistory() } }
+                        .font(.footnote).disabled(store.busy)
+                }
+                if let notice = store.historyNotice {
+                    Text(notice).font(.caption).foregroundStyle(.secondary)
+                }
+                Button(store.viewingEarlierHistory ? "回到最新消息" : "重新读取最新记录") { Task { await store.returnToLatest() } }
+                    .font(.caption).disabled(store.busy)
+            }.frame(maxWidth: .infinity)
         }
     }
 
