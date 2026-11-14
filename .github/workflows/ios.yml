@@ -74,8 +74,8 @@ jobs:
         with:
           name: ui-conversation-results
           path: |
-            build/ui-screenshots
-            build/ui-tests.xcresult
+            build/ui-screenshots/*.png
+            build/ui-screenshots/manifest.json
             ui-test.log
           if-no-files-found: ignore
           retention-days: 7
